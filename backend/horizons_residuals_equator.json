@@ -1,0 +1,92 @@
+{
+  "configuration": {
+    "api": "https://ssd.jpl.nasa.gov/api/horizons.api",
+    "center": "coord@301",
+    "coord_type": "CYLINDRICAL",
+    "site": {
+      "lat_deg": 0.0,
+      "lon_east_deg": 0.0,
+      "elev_m": 0.0,
+      "reference_radius_km": 1737.4
+    },
+    "quantities": "4,20",
+    "apparent": "AIRLESS",
+    "time_type": "UT",
+    "ours": "spkcpo LT+S MOON_ME_DE440_ME421, kernels per kernels_manifest.json"
+  },
+  "retrieved_utc": "2026-11-14T12:23:31+00:00",
+  "evidence": [
+    {
+      "body": "sun",
+      "time": "2027-03-14T12:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 89.14653356424904,
+        "elevation_deg": -10.841852841076449,
+        "distance_km": 148620691.31785387,
+        "angular_radius_deg": 0.26820504619890595
+      },
+      "horizons": {
+        "azimuth_deg": 89.146533564,
+        "elevation_deg": -10.84185283,
+        "distance_km": 148620691.32017717
+      },
+      "d_az_arcsec": 8.965116649051197e-07,
+      "d_el_arcsec": -3.9875213531104237e-05,
+      "d_range_km": -0.0023232996463775635
+    },
+    {
+      "body": "sun",
+      "time": "2028-01-10T00:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 91.00112688665158,
+        "elevation_deg": 66.15134317328173,
+        "distance_km": 147427342.3522156,
+        "angular_radius_deg": 0.27037604498112655
+      },
+      "horizons": {
+        "azimuth_deg": 91.001126885,
+        "elevation_deg": 66.151343174,
+        "distance_km": 147427342.35335374
+      },
+      "d_az_arcsec": 5.945707926002797e-06,
+      "d_el_arcsec": -2.5857843866106123e-06,
+      "d_range_km": -0.001138150691986084
+    },
+    {
+      "body": "earth",
+      "time": "2027-03-14T12:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 213.86859015658644,
+        "elevation_deg": 82.26607565471934,
+        "distance_km": 372954.2360191123,
+        "angular_radius_deg": 0.9788041851200658
+      },
+      "horizons": {
+        "azimuth_deg": 213.868587539,
+        "elevation_deg": 82.266075938,
+        "distance_km": 372954.2394076799
+      },
+      "d_az_arcsec": 0.009423311155387637,
+      "d_el_arcsec": -0.0010198103609582176,
+      "d_range_km": -0.0033885675948113203
+    },
+    {
+      "body": "earth",
+      "time": "2028-01-10T00:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 230.3523712359049,
+        "elevation_deg": 82.64181735778861,
+        "distance_km": 366837.8478551614,
+        "angular_radius_deg": 0.995125683785902
+      },
+      "horizons": {
+        "azimuth_deg": 230.35237007,
+        "elevation_deg": 82.641817598,
+        "distance_km": 366837.84861013945
+      },
+      "d_az_arcsec": 0.004197257658233866,
+      "d_el_arcsec": -0.0008647610115986026,
+      "d_range_km": -0.0007549780420958996
+    }
+  ]
+}

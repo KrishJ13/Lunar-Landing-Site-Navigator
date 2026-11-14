@@ -16,3 +16,10 @@ logs/
 .idea/
 **/.vscode/*
 !**/.vscode/extensions.json
+
+# Backend
+backend/.venv/
+backend/kernels/
+__pycache__/
+.pytest_cache/
+*.pyc
