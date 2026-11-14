@@ -16,3 +16,13 @@ logs/
 .idea/
 **/.vscode/*
 !**/.vscode/extensions.json
+
+# Python backend
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Downloaded elevation maps (hundreds of MB to GBs; fetch with backend/scripts/fetch_dem.py)
+backend/data/

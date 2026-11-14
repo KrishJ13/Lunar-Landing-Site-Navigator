@@ -1,0 +1,28 @@
+[project]
+name = "lunar-navigator-backend"
+version = "0.1.0"
+description = "Backend for the Lunar Landing Site Navigator: terrain, horizons and sky geometry."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26,<3",
+    "certifi>=2024",  # CA bundle for downloading from PDS (python.org macOS builds lack one)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["lunar*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "real_data: needs downloaded LOLA elevation files (run scripts/fetch_dem.py first)",
+]
