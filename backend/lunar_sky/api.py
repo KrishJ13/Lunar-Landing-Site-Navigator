@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 import spiceypy as sp
-from fastapi import FastAPI, Query, Request
+from fastapi import APIRouter, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -104,6 +104,9 @@ async def lifespan(app: FastAPI):
     app.state.kernels_ready = False
 
 
+# Routes live on a router so the unified service (lunar_skyline.app) can mount them next to the terrain API.
+router = APIRouter()
+
 app = FastAPI(title="Lunar Skyline API", version="0.1.0", lifespan=lifespan, docs_url="/docs")
 app.state.kernels_ready, app.state.kernel_detail = False, "not started"
 
@@ -116,25 +119,24 @@ app.add_middleware(
 )
 
 
-@app.exception_handler(RequestValidationError)
-async def _validation_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
     msgs = "; ".join(".".join(str(p) for p in e["loc"][1:]) + ": " + e["msg"] for e in exc.errors())
     return _error(422, "validation_error", msgs)
 
 
-@app.exception_handler(Exception)
-async def _unexpected_handler(_: Request, exc: Exception) -> JSONResponse:
+async def unexpected_handler(_: Request, exc: Exception) -> JSONResponse:
     log.exception("unhandled error", exc_info=exc)
     return _error(500, "internal_error", "Unexpected internal error.")
 
 
-@app.get("/api/v1/health", response_model=Health)
-def health() -> Health:
-    ok = app.state.kernels_ready
-    return Health(status="ok" if ok else "degraded", kernels_ready=ok, detail=app.state.kernel_detail)
+@router.get("/api/v1/health", response_model=Health)
+def health(request: Request) -> Health:
+    st = request.app.state
+    ok = st.kernels_ready
+    return Health(status="ok" if ok else "degraded", kernels_ready=ok, detail=st.kernel_detail)
 
 
-@app.get(
+@router.get(
     "/api/v1/positions",
     response_model=PositionsResponse,
     responses={
@@ -144,13 +146,14 @@ def health() -> Health:
     },
 )
 def get_positions(
+    request: Request,
     lat: Annotated[float, Query(ge=-90, le=90, allow_inf_nan=False, description="Planetocentric latitude, degrees")],
     lon: Annotated[float, Query(ge=-360, le=360, allow_inf_nan=False, description="East-positive longitude, degrees; normalised to [0, 360)")],
     timestamp_utc: Annotated[str, Query(description="ISO 8601 with explicit UTC (Z or +00:00)")],
     elevation_m: Annotated[float, Query(ge=positions.H_MIN_M, le=positions.H_MAX_M, allow_inf_nan=False, description="Metres above the 1737.4 km sphere")] = 0.0,
 ):
-    if not app.state.kernels_ready:
-        return _error(503, "kernels_unavailable", app.state.kernel_detail or "SPICE kernels unavailable.")
+    if not request.app.state.kernels_ready:
+        return _error(503, "kernels_unavailable", request.app.state.kernel_detail or "SPICE kernels unavailable.")
     try:
         positions._validate(lat, lon, elevation_m, timestamp_utc)
     except ValueError as e:
@@ -162,7 +165,7 @@ def get_positions(
         return _error(400, "ephemeris_unavailable", str(e))
 
 
-@app.get(
+@router.get(
     "/api/v1/positions/series",
     response_model=SeriesResponse,
     summary="Sun/Earth apparent positions at uniform UTC steps",
@@ -183,6 +186,7 @@ def get_positions(
     },
 )
 def get_positions_series(
+    request: Request,
     lat: Annotated[float, Query(ge=-90, le=90, allow_inf_nan=False, description="Planetocentric latitude, degrees")],
     lon: Annotated[float, Query(ge=-360, le=360, allow_inf_nan=False, description="East-positive longitude, degrees; normalised to [0, 360)")],
     start_utc: Annotated[str, Query(description="ISO 8601 with explicit UTC (Z or +00:00)")],
@@ -190,8 +194,8 @@ def get_positions_series(
     step_minutes: Annotated[float, Query(ge=positions.MIN_STEP_MIN, le=positions.MAX_STEP_MIN, allow_inf_nan=False, description="Sample interval in minutes, 10..360")],
     elevation_m: Annotated[float, Query(ge=positions.H_MIN_M, le=positions.H_MAX_M, allow_inf_nan=False, description="Metres above the 1737.4 km sphere")] = 0.0,
 ):
-    if not app.state.kernels_ready:
-        return _error(503, "kernels_unavailable", app.state.kernel_detail or "SPICE kernels unavailable.")
+    if not request.app.state.kernels_ready:
+        return _error(503, "kernels_unavailable", request.app.state.kernel_detail or "SPICE kernels unavailable.")
     try:
         start, dts = positions.plan_series(lat, lon, elevation_m, start_utc, hours, step_minutes)
     except ValueError as e:
@@ -199,10 +203,10 @@ def get_positions_series(
     site = positions.series_site(lat, lon, elevation_m)
     try:
         with _spice_lock:  # coverage + epoch conversion: cheap, done before any evaluation
-            if app.state.coverage is None:
-                app.state.coverage = positions.coverage_windows()
+            if request.app.state.coverage is None:
+                request.app.state.coverage = positions.coverage_windows()
             ets = positions.series_epochs(dts)
-            positions.check_coverage(ets, app.state.coverage)
+            positions.check_coverage(ets, request.app.state.coverage)
         samples = []
         for i in range(0, len(dts), SERIES_CHUNK):
             with _spice_lock:  # released between chunks so one long series can't starve others
@@ -222,3 +226,8 @@ def get_positions_series(
         "samples": samples,
         "model": positions.model_metadata(),
     }
+
+
+app.include_router(router)
+app.add_exception_handler(RequestValidationError, validation_handler)
+app.add_exception_handler(Exception, unexpected_handler)
