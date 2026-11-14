@@ -47,6 +47,7 @@ lunar/
   geometry.py          component 2: 3D positions, East/North/Up frame,
                        walking along the surface, azimuth/elevation to a point
   horizon.py           component 3: walk one compass direction, find the skyline
+  skyline.py           component 4: the full 360 deg skyline, several observer heights
   dem/                 component 1: elevation data
     pds_label.py       read PDS3 .lbl files
     projections.py     lat/lon <-> pixel (cylindrical, polar stereographic)
@@ -55,6 +56,7 @@ lunar/
 scripts/fetch_dem.py   download maps from PDS
 scripts/ray_section.py plot a terrain cross-section along one direction
                        (needs: pip install -e ".[plots]"; writes to output/)
+scripts/skyline_plot.py plot the 360 deg skyline panorama of a site (same extra)
 tests/
 ```
 
