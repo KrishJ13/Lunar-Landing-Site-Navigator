@@ -32,6 +32,7 @@ Conventions
 """
 import json
 import math
+import re
 from datetime import timedelta, timezone, datetime
 
 import numpy as np
@@ -76,7 +77,13 @@ def _validate(lat, lon, h, ts):
     if not isinstance(ts, str):
         raise ValueError("timestamp_utc must be an ISO 8601 string")
     try:
-        dt = datetime.fromisoformat(ts.strip())
+        s = ts.strip()
+        # Python 3.10's fromisoformat rejects a trailing 'Z' and fractional
+        # seconds that are not 3 or 6 digits (3.11+ accepts both).
+        if s[-1:] in ("Z", "z"):
+            s = s[:-1] + "+00:00"
+        s = re.sub(r"(\d{2}:\d{2}:\d{2})\.(\d{1,6})", lambda m: f"{m[1]}.{m[2].ljust(6, '0')}", s)
+        dt = datetime.fromisoformat(s)
     except ValueError as e:
         raise ValueError(f"unparseable timestamp_utc {ts!r}: {e}") from None
     if dt.tzinfo is None or dt.utcoffset().total_seconds() != 0:

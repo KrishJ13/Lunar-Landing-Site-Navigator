@@ -3,7 +3,8 @@ import { angleDiff, COMPASS_POINTS, compassName } from '../lib/view.js'
 
 /**
  * Compass tape across the top of the view, aligned with the landscape below:
- * ticks every 5°, degree labels every 15°, N/NE/E... every 45°, and the
+ * ticks every 5° (1° at 20° FOV or narrower), degree labels every 15° (5°, or
+ * 1° at 10° FOV or narrower), N/NE/E... every 45°, and the
  * current heading in the centre.
  */
 export default function CompassStrip({ heading, fov }) {
@@ -19,12 +20,15 @@ export default function CompassStrip({ heading, fov }) {
   const pxPerDeg = width / fov
   const names = Object.fromEntries(COMPASS_POINTS)
   const ticks = []
-  for (let az = 0; az < 360; az += 5) {
+  // Finer ticks when zoomed in, so a narrow view still has a scale.
+  const tickStep = fov <= 20 ? 1 : 5
+  const labelStep = fov <= 10 ? 1 : fov <= 20 ? 5 : 15
+  for (let az = 0; az < 360; az += tickStep) {
     const d = angleDiff(az, heading)
     if (Math.abs(d) > fov / 2) continue
     const x = width / 2 + d * pxPerDeg
     const major = az % 45 === 0
-    const labelled = az % 15 === 0
+    const labelled = az % labelStep === 0
     ticks.push(
       <g key={az}>
         <line x1={x} x2={x} y1={major ? 22 : labelled ? 26 : 30} y2={36} className={major ? 'tick major' : 'tick'} />

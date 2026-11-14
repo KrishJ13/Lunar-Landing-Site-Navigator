@@ -1,10 +1,12 @@
 import SkyChart from './SkyChart.jsx'
 import { SPEEDS } from '../lib/usePlayback.js'
+import { visibilityNote } from '../lib/view.js'
 
 const f = (n, d = 2) => n.toFixed(d)
 const fmtUtc = (t) => t.replace('T', ' ').replace(/(\.\d+)?(Z|\+00:00)?$/, '') + ' UTC'
 
-function BodyDetails({ name, b, hidden }) {
+function BodyDetails({ name, b, fraction }) {
+  const note = fraction === undefined ? (b.elevation_deg < 0 ? 'below horizon' : '') : visibilityNote(b, fraction)
   return (
     <div className="card">
       <h3>{name}</h3>
@@ -12,8 +14,8 @@ function BodyDetails({ name, b, hidden }) {
         <dt>Azimuth</dt><dd>{f(b.azimuth_deg)}°</dd>
         <dt>Elevation</dt>
         <dd>
-          {f(b.elevation_deg)}° {b.elevation_deg < 0 && <em>(below horizon)</em>}
-          {b.elevation_deg >= 0 && hidden && <em>(behind terrain)</em>}
+          {f(b.elevation_deg)}° {note && <em>({note})</em>}
+          {!note && b.elevation_deg < 0 && <em>(below 0°, but the terrain there is lower)</em>}
         </dd>
         <dt>Distance</dt><dd>{Math.round(b.distance_km).toLocaleString()} km</dd>
         <dt>Angular radius</dt><dd>{f(b.angular_radius_deg, 3)}°</dd>
@@ -26,7 +28,7 @@ function BodyDetails({ name, b, hidden }) {
  * Sun/Earth for one tile: sky chart, readout and time-series playback. All values come from the
  * cached SPICE series; moving the slider or playing never calls the API.
  */
-export default function SkyPanel({ series, playback, selected, onSelect, hiddenByTerrain }) {
+export default function SkyPanel({ series, playback, selected, onSelect, visibility }) {
   const { idx, last, isPlaying, speed } = playback
   const sample = series.samples[idx]
   const n = series.samples.length
@@ -36,11 +38,11 @@ export default function SkyPanel({ series, playback, selected, onSelect, hiddenB
       <div className="sky-result">
         <SkyChart data={sample} selected={selected} onSelect={onSelect} />
         <div className="details">
-          <BodyDetails name={selected === 'sun' ? 'Sun' : 'Earth'} b={sample[selected]} hidden={hiddenByTerrain?.[selected]} />
+          <BodyDetails name={selected === 'sun' ? 'Sun' : 'Earth'} b={sample[selected]} fraction={visibility?.[selected]} />
           <p className="muted small">
             Observer {f(series.site.latitude_deg)}°, {f(series.site.longitude_deg_east)}°E, {Math.round(series.site.elevation_m).toLocaleString()} m
             above the 1737.4 km reference sphere (ground + eye height). Azimuth is clockwise from lunar north; elevation is above the
-            local horizontal plane. The sky chart ignores terrain; the first-person view marks bodies behind terrain. Marker sizes in
+            local horizontal plane. The sky chart ignores terrain; the first-person view hides them behind terrain. Marker sizes in
             the chart are not to scale.
           </p>
         </div>

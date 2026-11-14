@@ -678,6 +678,7 @@
 
 .landscape .fade-in { position: relative; }
 .landscape canvas.sky-markers { position: absolute; left: 0; top: 0; pointer-events: none; }
+.landscape canvas.sky-backdrop { position: absolute; left: 0; top: 0; pointer-events: none; background: #000; }
 
 .sky-panel { margin-top: 16px; }
 .sky-result { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: center; margin-top: 8px; }

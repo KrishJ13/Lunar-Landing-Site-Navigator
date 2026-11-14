@@ -92,9 +92,52 @@ export function elevationStep(degreesVisible) {
   return steps.find((s) => degreesVisible / s <= 10) ?? 30
 }
 
-/** True if the body centre is above the horizon plane but below the terrain skyline in its direction. */
-export function isHidden(b, skyline) {
-  if (b.elevation_deg < 0) return false
-  const i = azimuthIndex(skyline.azimuth_deg, b.azimuth_deg)
-  return b.elevation_deg < skyline.elevation_deg[i]
+/**
+ * Elevation of the top of the drawn terrain at azimuth `az`: the top of the
+ * last segment in the nearest landscape strip (above it is sky). This is the
+ * exact edge the terrain canvas paints, so it matches the shader cut-off.
+ */
+export function terrainTopAt(landscape, az) {
+  const strip = landscape.segments[azimuthIndex(landscape.azimuth_deg, az)]
+  return strip.length ? strip[strip.length - 1][1] : -90
+}
+
+const DISC_COLUMNS = 64
+
+/**
+ * Fraction (0..1) of a body's disc above the terrain, integrated over the
+ * round on-screen disc the sky shader draws (lib/skyShader.js): radius r =
+ * angular_radius_deg in screen degrees, centre (az0, el0). For column offset
+ * x the chord is el0 ± h with h = sqrt(r^2 - x^2); the visible part of it is
+ * clamp(el0 + h - max(el0 - h, top(az0 + x)), 0, 2h). Midpoint rule over
+ * 64 columns; fraction = sum(visible) / sum(2h).
+ *
+ * Works for any skyline elevation, including a skyline below 0 deg (high
+ * sites), where a body below the horizontal plane can still be in view.
+ */
+export function bodyVisibility(b, landscape) {
+  const r = b.angular_radius_deg
+  let seen = 0
+  let total = 0
+  for (let k = 0; k < DISC_COLUMNS; k++) {
+    const x = r * (((k + 0.5) / DISC_COLUMNS) * 2 - 1)
+    const h = Math.sqrt(r * r - x * x)
+    const top = terrainTopAt(landscape, b.azimuth_deg + x)
+    const lo = Math.max(b.elevation_deg - h, top)
+    seen += Math.min(Math.max(b.elevation_deg + h - lo, 0), 2 * h)
+    total += 2 * h
+  }
+  return total > 0 ? seen / total : 0
+}
+
+/**
+ * Short note for a body given its visible fraction: '' when fully visible
+ * (even below 0 deg, if the terrain there is lower still), else
+ * 'partly behind terrain (40 % visible)', 'behind terrain' (centre above the
+ * horizontal plane) or 'below horizon'.
+ */
+export function visibilityNote(b, fraction) {
+  if (fraction >= 0.999) return ''
+  if (fraction > 0.001) return `partly behind terrain (${Math.min(99, Math.max(1, Math.round(fraction * 100)))} % visible)`
+  return b.elevation_deg >= 0 ? 'behind terrain' : 'below horizon'
 }

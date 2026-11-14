@@ -99,8 +99,9 @@ function DistanceLegend() {
       <p className="legend-note">
         Darker grey = nearer, lighter grey = farther, for both the terrain and its lines. Lines are ridge crests (which
         hide terrain behind them) and distance contours (0.5, 1, 2, 5, 10 … km from you), all drawn the same way. Views
-        are at true proportions. The Sun (yellow) and Earth (blue) are drawn at their true angular size; faded means
-        hidden behind terrain. Hover anywhere for the exact distance and height.
+        are at true proportions. The Sun and Earth are drawn at their true angular size and set behind the terrain;
+        a dashed outline marks one fully hidden. Earth&apos;s phase is exact; its clouds, the stars and the Sun&apos;s glow are
+        illustrative. Use a 5–20° field of view to see them up close. Hover anywhere for the exact distance and height.
       </p>
     </div>
   )

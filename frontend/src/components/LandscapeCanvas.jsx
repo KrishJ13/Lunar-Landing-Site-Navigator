@@ -7,10 +7,12 @@ import {
   elevationStep,
   formatDistance,
   formatHeight,
-  isHidden,
   makeViewScale,
   segmentAt,
+  bodyVisibility,
+  visibilityNote,
 } from '../lib/view.js'
+import { createSkyRenderer } from '../lib/skyShader.js'
 
 const GRID = 'rgba(255,255,255,0.07)'
 const EYE_LEVEL = 'rgba(255, 212, 59, 0.8)'
@@ -40,7 +42,9 @@ const HEIGHT = 6
  * proportions (one degree up is as large on screen as one degree across).
  *
  * Rendering (back to front):
- *   1. black sky
+ *   0. sky canvas (WebGL2, lib/skyShader.js): stars, Sun, Earth
+ *   1. terrain canvas, transparent where there is sky, so the ground is the
+ *      horizon cut-off for everything drawn on the sky canvas
  *   2. terrain faces filled with a muted grey distance shade, as a smooth
  *      ramp from each segment's near distance (bottom) to far (top)
  *   3. lines, all in one style: distance contours and ridge crests (every
@@ -50,8 +54,10 @@ const HEIGHT = 6
  * Distance shade: lib/colormap.js (greys: darker = nearer, lighter = farther).
  *
  * Props: data (ViewResponse), heading, pitch, fov, height (px), optional
- * `bodies` ({sun, earth} SPICE samples) drawn on a separate overlay canvas so
- * playback never redraws the terrain, plus optional pointer handlers for dragging.
+ * `bodies` ({sun, earth} SPICE samples) drawn on the sky canvas beneath, with
+ * their labels on an overlay canvas above, so playback never redraws the
+ * terrain; plus optional pointer handlers for dragging. Without WebGL2 the sky
+ * is black and the overlay draws flat discs instead.
  * Sun/Earth use the same axes as the terrain: azimuth clockwise from north,
  * elevation above the local horizontal plane.
  */
@@ -59,6 +65,10 @@ export default function LandscapeCanvas({ data, heading, pitch, fov, height, cla
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const markersRef = useRef(null)
+  const skyRef = useRef(null)
+  const rendererRef = useRef(null)
+  const [glOk, setGlOk] = useState(true)
+  const [glGeneration, setGlGeneration] = useState(0)
   const [width, setWidth] = useState(800)
   const [hover, setHover] = useState(null)
 
@@ -69,6 +79,38 @@ export default function LandscapeCanvas({ data, heading, pitch, fov, height, cla
   }, [])
 
   const { landscape, skyline } = data
+
+  const visibility = useMemo(
+    () => (bodies ? { sun: bodyVisibility(bodies.sun, landscape), earth: bodyVisibility(bodies.earth, landscape) } : null),
+    [bodies, landscape],
+  )
+
+  // WebGL2 sky: one context per view, kept across site changes; recreated after a context loss.
+  useEffect(() => {
+    const canvas = skyRef.current
+    let renderer = null
+    try {
+      renderer = createSkyRenderer(canvas)
+    } catch (err) {
+      console.error(err)
+    }
+    rendererRef.current = renderer
+    setGlOk(Boolean(renderer))
+    const onLost = (e) => {
+      e.preventDefault()
+      rendererRef.current = null
+      setGlOk(false)
+    }
+    const onRestored = () => setGlGeneration((g) => g + 1)
+    canvas.addEventListener('webglcontextlost', onLost)
+    canvas.addEventListener('webglcontextrestored', onRestored)
+    return () => {
+      canvas.removeEventListener('webglcontextlost', onLost)
+      canvas.removeEventListener('webglcontextrestored', onRestored)
+      renderer?.dispose()
+      rendererRef.current = null
+    }
+  }, [glGeneration])
 
   const scale = useMemo(
     () => makeViewScale({ width, height, heading, pitch, fov, exaggeration: 1 }),
@@ -94,8 +136,23 @@ export default function LandscapeCanvas({ data, heading, pitch, fov, height, cla
       canvas.width = Math.round(width * dpr)
       canvas.height = Math.round(height * dpr)
     }
-    drawBodies(canvas.getContext('2d'), scale, bodies, skyline, dpr)
-  }, [scale, bodies, skyline, width, height])
+    drawBodies(canvas.getContext('2d'), scale, bodies, visibility, dpr, !glOk)
+  }, [scale, bodies, visibility, width, height, glOk])
+
+  useEffect(() => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+    const canvas = skyRef.current
+    const dpr = window.devicePixelRatio || 1
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr)
+      canvas.height = Math.round(height * dpr)
+    }
+    const frame = requestAnimationFrame(() =>
+      renderer.render({ heading: scale.heading, pitch: scale.pitch, pxPerDeg: scale.pxPerDegX, dpr, bodies, visibility }),
+    )
+    return () => cancelAnimationFrame(frame)
+  }, [scale, bodies, visibility, width, height, glOk])
 
   function onPointerMove(event) {
     handlers.onPointerMove?.(event)
@@ -119,6 +176,7 @@ export default function LandscapeCanvas({ data, heading, pitch, fov, height, cla
 
   return (
     <div ref={wrapRef} className={`landscape ${className ?? ''}`}>
+      <canvas ref={skyRef} className="sky-backdrop" style={{ width: `${width}px`, height: `${height}px` }} aria-hidden="true" />
       {/* Re-keyed per site/eye height so a new view fades in. */}
       <div key={`${data.site.lat},${data.site.lon},${data.skyline.observer_height_m}`} className="fade-in">
         <canvas
@@ -142,9 +200,15 @@ export default function LandscapeCanvas({ data, heading, pitch, fov, height, cla
 
 const BODY_STYLE = { sun: ['Sun', '#f5b301'], earth: ['Earth', '#3b82f6'] }
 const MIN_MARKER_RADIUS_PX = 5
+const BLOOM_RADIUS_PX = 70
 
-/** Sun/Earth discs at their true angular size (minimum 5 px so they stay visible). */
-function drawBodies(ctx, scale, bodies, skyline, dpr) {
+/**
+ * Overlay above the terrain: Sun/Earth labels, a soft bloom where the Sun
+ * spills over the ground (scaled by its visible fraction), and a dashed
+ * outline where a body sits fully behind terrain. With `flat` (no WebGL2)
+ * it also draws the discs themselves, at true angular size (minimum 5 px).
+ */
+function drawBodies(ctx, scale, bodies, visibility, dpr, flat) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, scale.width, scale.height)
   if (!bodies) return
@@ -156,26 +220,53 @@ function drawBodies(ctx, scale, bodies, skyline, dpr) {
     const x = scale.x(b.azimuth_deg)
     if (x === null) continue
     const y = scale.y(b.elevation_deg)
-    const r = Math.max(b.angular_radius_deg * scale.pxPerDegY, MIN_MARKER_RADIUS_PX)
-    if (y < -r || y > scale.height + r) continue
-    const hidden = isHidden(b, skyline)
-    ctx.globalAlpha = hidden ? 0.45 : 1
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, 2 * Math.PI)
-    ctx.fillStyle = colour
-    ctx.fill()
-    ctx.lineWidth = 1.5
-    ctx.strokeStyle = 'rgba(0,0,0,0.7)'
-    if (hidden) ctx.setLineDash([3, 2])
-    ctx.stroke()
-    ctx.setLineDash([])
-    ctx.globalAlpha = 1
-    const note = b.elevation_deg < 0 ? ' (below horizon)' : hidden ? ' (behind terrain)' : ''
+    const trueR = b.angular_radius_deg * scale.pxPerDegY
+    const r = Math.max(trueR, MIN_MARKER_RADIUS_PX)
+    if (y < -r - BLOOM_RADIUS_PX || y > scale.height + r + BLOOM_RADIUS_PX) continue
+    const vis = visibility?.[key] ?? 1
+    const hidden = vis <= 0.001
+
+    if (flat) {
+      ctx.globalAlpha = hidden ? 0.45 : 1
+      ctx.beginPath()
+      ctx.arc(x, y, r, 0, 2 * Math.PI)
+      ctx.fillStyle = colour
+      ctx.fill()
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)'
+      if (hidden) ctx.setLineDash([3, 2])
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.globalAlpha = 1
+    } else if (hidden) {
+      ctx.beginPath()
+      ctx.arc(x, y, r, 0, 2 * Math.PI)
+      ctx.setLineDash([3, 2])
+      ctx.lineWidth = 1.2
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)'
+      ctx.stroke()
+      ctx.setLineDash([])
+    } else if (key === 'sun') {
+      // Lens bloom over the ground next to the Sun (artistic; no air on the Moon).
+      const R = BLOOM_RADIUS_PX + 2 * trueR
+      const g = ctx.createRadialGradient(x, y, 0, x, y, R)
+      g.addColorStop(0, `rgba(255, 240, 215, ${0.32 * vis})`)
+      g.addColorStop(0.25, `rgba(255, 230, 200, ${0.1 * vis})`)
+      g.addColorStop(1, 'rgba(255, 230, 200, 0)')
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.fillStyle = g
+      ctx.fillRect(x - R, y - R, 2 * R, 2 * R)
+      ctx.globalCompositeOperation = 'source-over'
+    }
+
+    const note = visibilityNote(b, vis)
+    const text = note ? `${label} (${note})` : label
     ctx.lineWidth = 3
     ctx.strokeStyle = 'rgba(0,0,0,0.75)'
     ctx.fillStyle = '#fff'
-    ctx.strokeText(label + note, x, y - r - 6)
-    ctx.fillText(label + note, x, y - r - 6)
+    const ty = y - r - (key === 'sun' && !hidden ? 14 : 6)
+    ctx.strokeText(text, x, ty)
+    ctx.fillText(text, x, ty)
   }
 }
 
@@ -201,7 +292,8 @@ function draw(ctx, scale, landscape, dpr) {
   const H = ctx.canvas.height
   const image = ctx.createImageData(W, H)
   const px = image.data
-  for (let k = 3; k < px.length; k += 4) px[k] = 255 // opaque black sky
+  // Sky stays transparent (alpha 0) so the WebGL sky beneath shows through;
+  // terrain pixels are opaque, which makes the ground the horizon cut-off.
   for (let X = 0; X < W; X++) {
     const strip = segments[azimuthIndex(azimuths, scale.azAt((X + 0.5) / dpr))]
     for (const seg of strip) {
@@ -222,6 +314,7 @@ function draw(ctx, scale, landscape, dpr) {
         px[k] = DEPTH_LUT[c] * level
         px[k + 1] = DEPTH_LUT[c + 1] * level
         px[k + 2] = DEPTH_LUT[c + 2] * level
+        px[k + 3] = 255
       }
     }
   }

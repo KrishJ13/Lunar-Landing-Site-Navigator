@@ -4,9 +4,10 @@ import { wrap360 } from '../lib/view.js'
 import CompassStrip from './CompassStrip.jsx'
 import LandscapeCanvas from './LandscapeCanvas.jsx'
 
-const FOV_OPTIONS = [60, 90, 120, 180]
+// Narrow fields of view show the Sun (~0.53° across) and Earth (~1.9°) at a usable size.
+const FOV_OPTIONS = [5, 10, 20, 60, 90, 120, 180]
 const DEFAULT_VIEW_HEIGHT = 420
-const PITCH_LIMIT = 60
+const PITCH_LIMIT = 85 // high enough to centre Earth near the zenith at narrow fields of view
 
 /**
  * Street View-style view from the observer's eye, always at true proportions

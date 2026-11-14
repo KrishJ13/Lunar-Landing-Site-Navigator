@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { fetchView } from '../api/horizon.js'
 import { fetchSeries } from '../api/sky.js'
-import { isHidden } from '../lib/view.js'
+import { bodyVisibility } from '../lib/view.js'
 import { usePlayback } from '../lib/usePlayback.js'
 import FirstPersonView from './FirstPersonView.jsx'
 import HorizonFacts from './HorizonFacts.jsx'
@@ -70,8 +70,12 @@ export default function SiteTile({ label, initialPresetIndex, compact, onClose, 
 
   const sample = series?.samples[playback.idx]
   const bodies = useMemo(() => (sample ? { sun: sample.sun, earth: sample.earth } : null), [sample])
-  const hiddenByTerrain = useMemo(
-    () => (bodies && data ? { sun: isHidden(bodies.sun, data.skyline), earth: isHidden(bodies.earth, data.skyline) } : null),
+  // Visible fraction (0..1) of each disc above the drawn terrain.
+  const visibility = useMemo(
+    () =>
+      bodies && data
+        ? { sun: bodyVisibility(bodies.sun, data.landscape), earth: bodyVisibility(bodies.earth, data.landscape) }
+        : null,
     [bodies, data],
   )
 
@@ -115,7 +119,7 @@ export default function SiteTile({ label, initialPresetIndex, compact, onClose, 
               playback={playback}
               selected={selected}
               onSelect={setSelected}
-              hiddenByTerrain={hiddenByTerrain}
+              visibility={visibility}
             />
           )}
           <SitePanel data={data} />
