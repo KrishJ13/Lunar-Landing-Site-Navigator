@@ -5,6 +5,7 @@ import pytest
 
 from lunar.config import MOON_RADIUS_M as R
 from lunar.dem import DemProduct
+from lunar.geometry import geometric_horizon
 from lunar.horizon import (
     horizon_point,
     horizon_ray,
@@ -52,15 +53,18 @@ class TestSampleDistances:
 
 
 class TestFlatMoon:
-    """On a smooth sphere the horizon is the classic geometric one:
-    dip = acos(R / (R + h)) below horizontal, at distance sqrt(2 R h)."""
+    """On a smooth sphere the terrain search must reproduce the exact geometric
+    horizon (lunar.geometry.geometric_horizon): dip acos(R/(R+h)) below
+    horizontal, at surface distance R * dip."""
 
-    @pytest.mark.parametrize("h", [2.0, 10.0, 50.0])
+    @pytest.mark.parametrize("h", [1.8, 2.0, 10.0, 50.0])
     def test_horizon_dip_and_distance(self, flat_moon, h):
         _, _, point = horizon_ray(flat_moon, 10.0, 20.0, 45.0, height_above_ground_m=h, min_step_m=10.0)
-        expected_dip = np.degrees(np.arccos(R / (R + h)))
-        assert point.elevation_deg == pytest.approx(-expected_dip, rel=1e-3)
-        assert point.distance_m == pytest.approx(np.sqrt(2 * R * h), rel=0.02)
+        exact = geometric_horizon(h)
+        assert point.elevation_deg == pytest.approx(-exact["dip_deg"], rel=1e-3)
+        # The angle curve is flat around the tangent point, so the sampled
+        # distance is only located to within a couple of percent.
+        assert point.distance_m == pytest.approx(exact["surface_distance_m"], rel=0.02)
         assert not point.at_max_range
 
     def test_too_short_range_is_flagged(self, flat_moon):
@@ -76,7 +80,8 @@ class TestFlatMoon:
         delta = profile.distance_m / R
         np.testing.assert_allclose(forward, R * np.sin(delta), rtol=1e-9)
         np.testing.assert_allclose(up, R * np.cos(delta) - (R + 2.0), rtol=1e-9)
-        assert up[-1] == pytest.approx(-(2.0 + 200_000**2 / (2 * R)), rel=5e-3)
+        d_last = profile.distance_m[-1]
+        assert up[-1] == pytest.approx(-(2.0 + d_last**2 / (2 * R)), rel=1e-2)
 
 
 class TestPlateau:

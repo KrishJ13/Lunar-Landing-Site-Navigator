@@ -87,3 +87,57 @@ def test_cors_allows_vite_dev_server(client):
         headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"},
     )
     assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+class TestView:
+    def test_view_shape_and_defaults(self, client):
+        r = client.post("/api/view", json={"lat": -90, "lon": 0, "azimuth_step_deg": 10})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["skyline"]["observer_height_m"] == 1.8
+        land = body["landscape"]
+        assert len(land["azimuth_deg"]) == len(land["segments"]) == 36
+        assert land["segment_fields"][0] == "el_low_deg" and land["segment_fields"][-1] == "height_m"
+        assert len(land["mean_level_elevation_deg"]) == 36
+        info = body["site_info"]
+        assert info["ground_m"] == 0 and info["eye_m"] == 1.8
+        assert info["setting"].startswith("open")
+        assert [s["radius_m"] for s in info["surroundings"]] == [1000, 10000]
+        for strip, top in zip(land["segments"], body["skyline"]["elevation_deg"]):
+            assert strip[0][0] == -90
+            assert strip[-1][1] == pytest.approx(top, abs=1e-3)
+
+    def test_smooth_horizon_numbers(self, client):
+        body = client.post("/api/view", json={"lat": 0, "lon": 0, "observer_height_m": 1.8, "azimuth_step_deg": 10}).json()
+        sh = body["smooth_horizon"]
+        assert sh["radius_m"] == 1_737_400
+        assert sh["line_of_sight_m"] == pytest.approx(2500.93, abs=0.01)
+        assert sh["earth_line_of_sight_m"] == pytest.approx(4789.11, abs=0.01)
+        assert sh["dip_deg"] == pytest.approx(0.08248, abs=1e-5)
+
+    @pytest.mark.parametrize("height", [-1, 100.5])
+    def test_eye_height_limits(self, client, height):
+        r = client.post("/api/view", json={"lat": 0, "lon": 0, "observer_height_m": height})
+        assert r.status_code == 422
+
+
+class TestRidges:
+    def test_ridges_shape(self, client):
+        r = client.post("/api/ridges", json={"lat": -90, "lon": 0, "azimuth_step_deg": 2})
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["skyline"]["azimuth_deg"]) == 180
+        assert body["ridgelines"], "expected at least one ridgeline"
+        d = [line["median_distance_km"] for line in body["ridgelines"]]
+        assert d == sorted(d, reverse=True)  # far to near
+        for line in body["ridgelines"]:
+            n = len(line["azimuth_deg"])
+            assert all(len(line[k]) == n for k in ("elevation_deg", "distance_km", "height_m", "lat", "lon", "skyline"))
+        assert body["peaks"] and body["peaks"][0]["on_skyline"]
+
+    def test_plateau_wall_is_a_ridgeline_east(self, client):
+        body = client.post("/api/ridges", json={"lat": -90, "lon": 0, "azimuth_step_deg": 2}).json()
+        walls = [ln for ln in body["ridgelines"] if 19 <= ln["median_distance_km"] <= 40]
+        assert walls, "the 1 km plateau 20 km east should appear as a ridgeline"
+        az = [a % 360 for a in walls[0]["azimuth_deg"]]
+        assert min(az) < 90 < max(az)

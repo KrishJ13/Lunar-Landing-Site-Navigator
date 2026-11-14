@@ -115,6 +115,28 @@ def destination(lat, lon, azimuth_deg, distance_m, radius_m: float = MOON_RADIUS
     return lat2, lon2
 
 
+def geometric_horizon(eye_height_m, radius_m: float = MOON_RADIUS_M) -> dict:
+    """The horizon over a perfectly smooth sphere, for an eye `eye_height_m` up.
+
+    Exact formulas (no small-height approximation):
+        line of sight to horizon   L     = sqrt(h (2R + h))      (= sqrt((R+h)^2 - R^2))
+        dip below eye level        alpha = acos(R / (R + h))
+        distance along the surface s     = R * alpha
+    For small h all three distances are ~ sqrt(2 R h); they differ by < 0.1 m
+    for h <= 50 m on the Moon.
+
+    This is the baseline "how far can I see on flat ground"; real terrain
+    (lunar.skyline) replaces it wherever hills or mountains rise above it.
+    """
+    h = float(eye_height_m)
+    alpha = np.arccos(radius_m / (radius_m + h))
+    return {
+        "line_of_sight_m": float(np.sqrt(h * (2.0 * radius_m + h))),
+        "surface_distance_m": float(radius_m * alpha),
+        "dip_deg": float(np.degrees(alpha)),
+    }
+
+
 def look_angles(observer, targets, basis):
     """Azimuth, elevation and range from an observer to target point(s).
 

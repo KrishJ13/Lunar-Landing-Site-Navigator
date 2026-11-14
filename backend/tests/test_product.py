@@ -80,3 +80,36 @@ def test_rejects_truncated_download(make_cylindrical):
     img.write_bytes(img.read_bytes()[:-4])
     with pytest.raises(ValueError, match="incomplete download"):
         DemProduct.open(label)
+
+
+class TestBicubic:
+    def test_exact_at_pixel_centres(self, make_cylindrical):
+        product = DemProduct.open(make_cylindrical(lambda lat, lon: np.sin(np.radians(3 * lat)) + np.cos(np.radians(2 * lon))))
+        # pixel centres at (lat 10.125, lon 20.125) etc. (ppd = 4)
+        lat, lon = np.array([10.125, -33.375]), np.array([20.125, 300.875])
+        np.testing.assert_allclose(
+            product.heights_m(lat, lon, "bicubic"), product.heights_m(lat, lon, "bilinear"), atol=1e-3
+        )
+
+    def test_reproduces_quadratic(self, make_polar):
+        # Keys cubic convolution reproduces quadratics exactly; bilinear does not.
+        product = DemProduct.open(make_polar(lambda x, y: (x * x + 0.5 * y * y) / 1e8, n=101, scale_m=1000.0))
+        line, sample = np.array([40.3, 55.7]), np.array([61.2, 47.9])
+        lat, lon = product.projection.pixel_to_latlon(line, sample)
+        x, y = (sample - 50) * 1000, (50 - line) * 1000
+        expected = (x * x + 0.5 * y * y) / 1e8 * 1000
+        np.testing.assert_allclose(product.heights_m(lat, lon, "bicubic"), expected, atol=0.01)
+        assert np.abs(product.heights_m(lat, lon, "bilinear") - expected).max() > 1.0
+
+    def test_slope_is_continuous_across_pixel_boundary(self, make_polar):
+        # Along a line crossing a pixel boundary, bilinear slope jumps; bicubic does not.
+        product = DemProduct.open(make_polar(lambda x, y: np.sin(x / 3000.0), n=101, scale_m=1000.0))
+        eps = 1e-4
+        samples = np.array([60.5 - 2 * eps, 60.5 - eps, 60.5 + eps, 60.5 + 2 * eps]) - 0.5  # boundary at 60.0
+        lat, lon = product.projection.pixel_to_latlon(np.full(4, 45.0), samples)
+
+        def slope_jump(method):
+            h = product.heights_m(lat, lon, method)
+            return abs((h[3] - h[2]) - (h[1] - h[0])) / eps
+
+        assert slope_jump("bicubic") < 0.05 * slope_jump("bilinear")

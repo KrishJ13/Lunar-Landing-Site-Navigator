@@ -65,10 +65,16 @@ class DemProduct:
         line, sample = self.projection.latlon_to_pixel(lat, lon)
         return self._inside(line, sample)
 
-    def heights_m(self, lat, lon) -> np.ndarray:
+    def heights_m(self, lat, lon, method: str = "bilinear") -> np.ndarray:
         """Terrain height in metres above the 1737.4 km sphere.
 
-        Bilinear interpolation between the four surrounding pixel centres.
+        method:
+          "bilinear"  blend of the 4 surrounding pixel centres. Continuous,
+                      but its slope jumps at every pixel boundary (faceted).
+          "bicubic"   Catmull-Rom (Keys a = -0.5) over the 16 surrounding
+                      pixel centres. Passes exactly through every pixel value
+                      AND has a continuous slope, so contours and ridge crests
+                      come out smooth. Reproduces planes and quadratics exactly.
         Points outside this map's coverage return NaN.
         """
         line, sample = self.projection.latlon_to_pixel(lat, lon)
@@ -76,12 +82,13 @@ class DemProduct:
         inside = self._inside(line, sample)
         out = np.full(line.shape, np.nan)
         if inside.any():
-            out[inside] = self._bilinear(line[inside], sample[inside])
+            interpolate = self._bicubic if method == "bicubic" else self._bilinear
+            out[inside] = interpolate(line[inside], sample[inside])
         return out * 1000.0 * self.km_scale
 
-    def height_m(self, lat: float, lon: float) -> float:
+    def height_m(self, lat: float, lon: float, method: str = "bilinear") -> float:
         """Scalar convenience wrapper around heights_m."""
-        return float(self.heights_m(lat, lon)[0])
+        return float(self.heights_m(lat, lon, method)[0])
 
     # ---------- internals ----------
 
@@ -99,6 +106,36 @@ class DemProduct:
         if self._wraps_longitude():
             return np.ones(line.shape, dtype=bool)
         return (line >= 0) & (line <= lines - 1) & (sample >= 0) & (sample <= samples - 1)
+
+    def _bicubic(self, line, sample):
+        lines, samples = self.shape
+        line = np.clip(line, 0.0, lines - 1.0)
+        l1 = np.minimum(np.floor(line).astype(np.int64), lines - 2)
+        tl = line - l1
+        s1 = np.floor(sample).astype(np.int64)
+        ts = sample - s1
+        if not self._wraps_longitude():
+            s1 = np.minimum(s1, samples - 2)
+            ts = sample - s1
+
+        def rows(k):
+            return np.clip(l1 + k, 0, lines - 1)
+
+        def cols(k):
+            c = s1 + k
+            return np.mod(c, samples) if self._wraps_longitude() else np.clip(c, 0, samples - 1)
+
+        wl = _catmull_rom_weights(tl)
+        ws = _catmull_rom_weights(ts)
+        d = self.data
+        out = np.zeros(line.shape)
+        for i, ki in enumerate((-1, 0, 1, 2)):
+            r = rows(ki)
+            row_sum = np.zeros(line.shape)
+            for j, kj in enumerate((-1, 0, 1, 2)):
+                row_sum += ws[j] * d[r, cols(kj)]
+            out += wl[i] * row_sum
+        return out
 
     def _bilinear(self, line, sample):
         lines, samples = self.shape
@@ -119,6 +156,17 @@ class DemProduct:
         top = d[l0, s0] * (1 - fs) + d[l0, s1] * fs
         bottom = d[l0 + 1, s0] * (1 - fs) + d[l0 + 1, s1] * fs
         return top * (1 - fl) + bottom * fl
+
+
+def _catmull_rom_weights(t):
+    """Weights for samples at offsets -1, 0, 1, 2 (Keys cubic, a = -0.5)."""
+    t2, t3 = t * t, t * t * t
+    return (
+        0.5 * (-t3 + 2 * t2 - t),
+        0.5 * (3 * t3 - 5 * t2 + 2),
+        0.5 * (-3 * t3 + 4 * t2 + t),
+        0.5 * (t3 - t2),
+    )
 
 
 def _check_image_format(image: dict, label_path: Path) -> None:

@@ -130,7 +130,7 @@ def skyline_for_observer(rays: TerrainRays, observer: Observer, max_range_m: flo
     )
 
 
-def _concatenate(parts: list[HorizonProfile]) -> HorizonProfile:
+def _concatenate(parts: list[HorizonProfile]) -> HorizonProfile:  # also used by lunar.landscape
     """Join profiles computed for consecutive chunks of azimuths."""
     first = parts[0]
     joined = {

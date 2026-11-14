@@ -95,13 +95,13 @@ def height_at(products: list[DemProduct], lat: float, lon: float) -> float:
     return best_product(products, lat, lon).height_m(lat, lon)
 
 
-def heights_at(products: list[DemProduct], lat, lon):
+def heights_at(products: list[DemProduct], lat, lon, method: str = "bilinear"):
     """Vectorised height lookup over many points, each from its finest map.
 
     Maps are tried finest-first; each point takes its height from the first
     map that covers it. Returns (heights_m, pixel_size_m) arrays, the second
     recording which resolution each height came from. Points no map covers
-    are NaN in both.
+    are NaN in both. `method` is "bilinear" or "bicubic" (see DemProduct).
     """
     lat, lon = np.broadcast_arrays(np.atleast_1d(lat), np.atleast_1d(lon))
     heights = np.full(lat.shape, np.nan)
@@ -110,7 +110,7 @@ def heights_at(products: list[DemProduct], lat, lon):
         todo = np.isnan(heights)
         if not todo.any():
             break
-        h = product.heights_m(lat[todo], lon[todo])
+        h = product.heights_m(lat[todo], lon[todo], method)
         found = ~np.isnan(h)
         idx = np.flatnonzero(todo)[found]
         heights.flat[idx] = h[found]

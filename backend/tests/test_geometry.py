@@ -5,6 +5,7 @@ from lunar.config import MOON_RADIUS_M as R
 from lunar.geometry import (
     destination,
     enu_basis,
+    geometric_horizon,
     horizontal_direction,
     look_angles,
     surface_vector,
@@ -135,3 +136,25 @@ class TestLookAngles:
         az, el, _ = look_angles(site, np.stack([sun, earth]), basis)
         np.testing.assert_allclose(az, [57.386895, 143.970670], atol=1e-3)
         np.testing.assert_allclose(el, [1.766619, -2.054944], atol=1e-3)
+
+
+class TestGeometricHorizon:
+    """Reference values: Wikipedia 'Horizon' geometrical model, d = sqrt(h (2R + h))."""
+
+    def test_reproduces_wikipedia_values(self):
+        # 1.8 m eye; Wikipedia uses the IAU mean lunar radius 1737.1 km and Earth 6371 km.
+        assert geometric_horizon(1.8, radius_m=1_737_100)["line_of_sight_m"] == pytest.approx(2500.7125, abs=1e-3)
+        assert geometric_horizon(1.8, radius_m=6_371_000)["line_of_sight_m"] == pytest.approx(4789.1130, abs=1e-3)
+
+    def test_default_radius_is_lola_reference_sphere(self):
+        # With LOLA's 1737.4 km sphere the 1.8 m horizon is 0.2 m farther.
+        assert geometric_horizon(1.8)["line_of_sight_m"] == pytest.approx(2500.93, abs=0.01)
+
+    @pytest.mark.parametrize("h", [0.5, 1.8, 10.0, 100.0])
+    def test_formulas_are_consistent(self, h):
+        g = geometric_horizon(h)
+        # dip angle and line of sight describe the same right triangle
+        assert np.cos(np.radians(g["dip_deg"])) == pytest.approx(R / (R + h), rel=1e-12)
+        assert g["line_of_sight_m"] == pytest.approx((R + h) * np.sin(np.radians(g["dip_deg"])), rel=1e-9)
+        assert g["surface_distance_m"] < g["line_of_sight_m"]
+        assert g["surface_distance_m"] == pytest.approx(np.sqrt(2 * R * h), rel=1e-4)

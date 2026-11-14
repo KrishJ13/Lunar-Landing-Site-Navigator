@@ -28,7 +28,7 @@ import numpy as np
 from .dem import DemProduct, best_product, heights_at
 from .geometry import destination, dot, enu_basis, horizontal_direction, look_angles, surface_vector
 
-DEFAULT_MAX_RANGE_M = 200_000.0  # far enough for south pole massifs (Malapert is ~135 km from Shackleton)
+DEFAULT_MAX_RANGE_M = 300_000.0  # covers the ~264 km worst case (20 km relief); real skylines tested <= 154 km
 DEFAULT_RELATIVE_STEP = 0.005  # each step is 0.5% of the distance so far
 DEFAULT_OBSERVER_HEIGHT_M = 2.0  # eye level of a standing astronaut / small lander
 
@@ -76,10 +76,13 @@ def make_observer(
     lat: float,
     lon: float,
     height_above_ground_m: float = DEFAULT_OBSERVER_HEIGHT_M,
+    method: str = "bilinear",
 ) -> Observer:
-    """Put an eye `height_above_ground_m` above the terrain at (lat, lon)."""
+    """Put an eye `height_above_ground_m` above the terrain at (lat, lon).
+
+    `method` is the height interpolation ("bilinear" or "bicubic")."""
     site_map = best_product(products, lat, lon)
-    ground = site_map.height_m(lat, lon)
+    ground = site_map.height_m(lat, lon, method)
     return Observer(
         lat=lat,
         lon=lon,
