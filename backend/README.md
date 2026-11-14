@@ -52,3 +52,22 @@ Future UTC results are predictions, not validated against a leap-second schedule
 
 ## Earth radius
 Earth angular radius uses the 6371.0 km mean sphere (Phase 1B approximation; equatorial 6378.137 km is 0.1 % larger).
+
+## HTTP API (FastAPI)
+
+Start (Windows PowerShell, from `backend/`):
+
+    .\.venv\Scripts\python.exe -m uvicorn lunar_sky.api:app --host 127.0.0.1 --port 8000
+
+Swagger UI: http://127.0.0.1:8000/docs
+
+    GET /api/v1/health
+    GET /api/v1/positions?lat=-89.5&lon=223&elevation_m=0&timestamp_utc=2027-03-14T12:00:00Z
+
+`/positions` returns the `calculate_positions()` JSON unchanged (units/field names as in Phase 1).
+`lon` is east-positive in [-360, 360], normalised to [0, 360); `elevation_m` defaults to 0.
+Errors are `{"error", "detail"}`: 422 invalid/non-finite input or non-UTC timestamp; 400 date outside
+kernel coverage / SPICE failure; 503 kernels missing or unloadable (`/health` then reports
+`"status": "degraded"`); 500 unexpected (no stack trace returned).
+Kernels load once at startup; SPICE calls are serialised with a lock (CSPICE is not thread-safe).
+CORS: `http://localhost:5173` by default; override with `LUNAR_SKY_CORS_ORIGINS` (comma-separated).
