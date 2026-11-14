@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from . import positions
+from .globe import globe_geometry
 from .kernels import KDIR, LOAD_ORDER, load_kernels
 
 log = logging.getLogger("lunar_sky.api")
@@ -134,6 +135,21 @@ def health(request: Request) -> Health:
     st = request.app.state
     ok = st.kernels_ready
     return Health(status="ok" if ok else "degraded", kernels_ready=ok, detail=st.kernel_detail)
+
+
+@router.get("/api/v1/moon-globe")
+def get_moon_globe(request: Request, timestamp_utc: str):
+    if not request.app.state.kernels_ready:
+        return _error(503, "kernels_unavailable", request.app.state.kernel_detail or "SPICE kernels unavailable.")
+    try:
+        instant = positions._validate(0, 0, 0, timestamp_utc)
+    except ValueError as exc:
+        return _error(422, "validation_error", str(exc))
+    try:
+        with _spice_lock:
+            return globe_geometry(instant)
+    except sp.utils.exceptions.SpiceyError:
+        return _error(400, "ephemeris_unavailable", "Date is outside the installed ephemeris coverage.")
 
 
 @router.get(

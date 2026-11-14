@@ -1,14 +1,22 @@
+import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: {
+        menu: fileURLToPath(new URL('./index.html', import.meta.url)),
+        moon: fileURLToPath(new URL('./moon.html', import.meta.url)),
+        skyline: fileURLToPath(new URL('./skyline.html', import.meta.url)),
+      },
+    },
+  },
   server: {
-    // Forward /api/* to the Python backend during development, so the
-    // frontend can use relative URLs and no CORS setup is needed.
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
+      '/api': process.env.LUNAR_API_PROXY || 'http://127.0.0.1:8000',
     },
   },
 })
