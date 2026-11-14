@@ -44,6 +44,8 @@ near the poles. For each point, the finest map that covers it is used.
 ```
 lunar/
   config.py            constants (Moon radius, data folder)
+  geometry.py          component 2: 3D positions, East/North/Up frame,
+                       walking along the surface, azimuth/elevation to a point
   dem/                 component 1: elevation data
     pds_label.py       read PDS3 .lbl files
     projections.py     lat/lon <-> pixel (cylindrical, polar stereographic)
