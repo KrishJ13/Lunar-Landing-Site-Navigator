@@ -32,12 +32,12 @@ Conventions
 """
 import json
 import math
-from datetime import timezone, datetime
+from datetime import timedelta, timezone, datetime
 
 import numpy as np
 import spiceypy as sp
 
-from .kernels import MOON_FRAME, ROOT, load_kernels
+from .kernels import MOON_FRAME, ROOT, et_to_utc, load_kernels, pck_coverage_et, spk_coverage_et
 
 REFERENCE_RADIUS_KM = 1737.4
 ABCORR = "LT+S"
@@ -84,46 +84,149 @@ def _validate(lat, lon, h, ts):
     return dt.astimezone(timezone.utc)
 
 
+def _site(latitude_deg, longitude_deg_east, elevation_m):
+    """Constant per-site geometry (observer position, ENU basis), computed once per request."""
+    lon = longitude_deg_east % 360.0
+    return observer_position_km(latitude_deg, lon, elevation_m), enu_basis(latitude_deg, lon)
+
+
+def _et(dt):
+    return sp.str2et(dt.strftime("%Y-%m-%dT%H:%M:%S.%f"))
+
+
+def _evaluate(et, obspos, enu):
+    """Apparent Sun/Earth for one epoch. Caller must hold the SPICE lock and have kernels loaded."""
+    out = {}
+    for key, target in _TARGETS.items():
+        state, _lt = sp.spkcpo(target, et, MOON_FRAME, "OBSERVER", ABCORR,
+                               list(obspos), "MOON", MOON_FRAME)
+        e, n, u = enu @ np.asarray(state[:3])
+        dist = float(np.linalg.norm([e, n, u]))
+        out[key] = {
+            "azimuth_deg": float(math.degrees(math.atan2(e, n)) % 360.0),
+            "elevation_deg": float(math.degrees(math.atan2(u, math.hypot(e, n)))),
+            "distance_km": dist,
+            "angular_radius_deg": float(math.degrees(math.asin(BODY_RADIUS_KM[key] / dist))),
+        }
+    return out
+
+
+def model_metadata():
+    manifest = json.loads((ROOT / "kernels_manifest.json").read_text())
+    return {
+        "reference_frame": MOON_FRAME,
+        "reference_radius_km": REFERENCE_RADIUS_KM,
+        "aberration_correction": ABCORR,
+        "spice_function": "spkcpo(obsctr=MOON, obsref=outref=MOON_ME_DE440_ME421, refloc=OBSERVER)",
+        "body_radii_km": BODY_RADIUS_KM,
+        "kernel_manifest": "backend/kernels_manifest.json",
+        "kernels": [k["filename"] for k in manifest["kernels"]],
+        "terrain_occlusion_modelled": False,
+        "horizon": "mathematical (no terrain, no refraction)",
+        "validation_status": "pending",
+    }
+
+
 def calculate_positions(latitude_deg, longitude_deg_east, elevation_m, timestamp_utc):
     dt = _validate(latitude_deg, longitude_deg_east, elevation_m, timestamp_utc)
-    lon = longitude_deg_east % 360.0
     if sp.ktotal("ALL") == 0:
         load_kernels()
     try:
-        et = sp.str2et(dt.strftime("%Y-%m-%dT%H:%M:%S.%f"))
-        obspos = observer_position_km(latitude_deg, lon, elevation_m)
-        enu = enu_basis(latitude_deg, lon)
-        out = {}
-        for key, target in _TARGETS.items():
-            state, _lt = sp.spkcpo(target, et, MOON_FRAME, "OBSERVER", ABCORR,
-                                   list(obspos), "MOON", MOON_FRAME)
-            e, n, u = enu @ np.asarray(state[:3])
-            dist = float(np.linalg.norm([e, n, u]))
-            out[key] = {
-                "azimuth_deg": float(math.degrees(math.atan2(e, n)) % 360.0),
-                "elevation_deg": float(math.degrees(math.atan2(u, math.hypot(e, n)))),
-                "distance_km": dist,
-                "angular_radius_deg": float(math.degrees(math.asin(BODY_RADIUS_KM[key] / dist))),
-            }
+        out = _evaluate(_et(dt), *_site(latitude_deg, longitude_deg_east, elevation_m))
     except sp.SpiceyError as e:
         raise ValueError(f"SPICE could not evaluate this request (kernel coverage?): {e}") from None
-    manifest = json.loads((ROOT / "kernels_manifest.json").read_text())
     return {
         "site": {"latitude_deg": latitude_deg, "longitude_deg_east": longitude_deg_east,
                  "elevation_m": elevation_m},
         "timestamp_utc": timestamp_utc,
         "sun": out["sun"],
         "earth": out["earth"],
-        "model": {
-            "reference_frame": MOON_FRAME,
-            "reference_radius_km": REFERENCE_RADIUS_KM,
-            "aberration_correction": ABCORR,
-            "spice_function": "spkcpo(obsctr=MOON, obsref=outref=MOON_ME_DE440_ME421, refloc=OBSERVER)",
-            "body_radii_km": BODY_RADIUS_KM,
-            "kernel_manifest": "backend/kernels_manifest.json",
-            "kernels": [k["filename"] for k in manifest["kernels"]],
-            "terrain_occlusion_modelled": False,
-            "horizon": "mathematical (no terrain, no refraction)",
-            "validation_status": "pending",
-        },
+        "model": model_metadata(),
     }
+
+
+# ---------------------------------------------------------------- time series
+MAX_SAMPLES = 1000
+MAX_HOURS = 168.0
+MIN_STEP_MIN, MAX_STEP_MIN = 10.0, 360.0
+
+
+def _fmt(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ" if dt.microsecond == 0 else "%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def plan_series(latitude_deg, longitude_deg_east, elevation_m, start_utc, hours, step_minutes):
+    """Validate a series request (pure Python, no SPICE). Returns (start_dt, timestamps).
+
+    Sampling: t_k = start + k*step for k = 0..K, K = floor(hours*60/step). The end instant
+    start+hours is included only if it falls exactly on a step; otherwise the last sample is
+    the last one before it. Sample times are UTC wall-clock instants (leap seconds follow SPICE
+    str2et, exactly as in /positions).
+    """
+    start = _validate(latitude_deg, longitude_deg_east, elevation_m, start_utc)
+    for name, v in (("hours", hours), ("step_minutes", step_minutes)):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f"{name} must be a finite number, got {v!r}")
+    if not 0 < hours <= MAX_HOURS:
+        raise ValueError(f"hours must be > 0 and <= {MAX_HOURS:g}, got {hours}")
+    if not MIN_STEP_MIN <= step_minutes <= MAX_STEP_MIN:
+        raise ValueError(f"step_minutes must be in [{MIN_STEP_MIN:g}, {MAX_STEP_MIN:g}], got {step_minutes}")
+    ratio = hours * 60.0 / step_minutes
+    k = math.floor(ratio + 1e-9)
+    count = k + 1
+    if count > MAX_SAMPLES:
+        raise ValueError(f"request would produce {count} samples; the maximum is {MAX_SAMPLES} "
+                         "(increase step_minutes or reduce hours)")
+    step = timedelta(minutes=step_minutes)
+    return start, [start + i * step for i in range(count)]
+
+
+def series_end(start, hours):
+    """Requested end instant (start + hours)."""
+    return start + timedelta(hours=hours)
+
+
+def series_epochs(dts):
+    """ET for each sample. Caller holds the SPICE lock."""
+    try:
+        return [_et(d) for d in dts]
+    except sp.SpiceyError as e:
+        raise ValueError(f"SPICE could not convert a timestamp: {e}") from None
+
+
+def coverage_windows():
+    """Intersection-ready ET coverage per requirement, from the installed kernels (lock held)."""
+    wins = [spk_coverage_et(b) for b in (10, 301, 399)]
+    # MOON_ME_DE440_ME421 is a fixed-offset TK frame defined relative to MOON_PA_DE440, whose
+    # orientation comes from the binary PCK; that PA frame is what the PCK covers.
+    wins.append(pck_coverage_et(sp.namfrm("MOON_PA_DE440")))
+    return wins
+
+
+def check_coverage(ets, wins):
+    """Raise ValueError unless first and last sample lie in one coverage interval of every kernel."""
+    lo, hi = ets[0], ets[-1]  # ets ascending
+    for w in wins:
+        if not any(a <= lo and hi <= b for a, b in w):
+            raise ValueError(
+                f"requested span {et_to_utc(lo)}..{et_to_utc(hi)} UTC is outside installed kernel coverage "
+                f"(available: {et_to_utc(w[0][0])}..{et_to_utc(w[-1][1])} UTC)")
+
+
+def evaluate_series_chunk(site, dts, ets):
+    """Compute samples for one chunk. Caller holds the SPICE lock. All-or-error."""
+    obspos, enu = site
+    samples = []
+    for dt, et in zip(dts, ets):
+        try:
+            out = _evaluate(et, obspos, enu)
+        except sp.SpiceyError as e:
+            raise ValueError(f"SPICE failed at {_fmt(dt)}: {e}") from None
+        if not all(math.isfinite(v) for b in out.values() for v in b.values()):
+            raise ValueError(f"non-finite result at {_fmt(dt)}")
+        samples.append({"timestamp_utc": _fmt(dt), "sun": out["sun"], "earth": out["earth"]})
+    return samples
+
+
+def series_site(latitude_deg, longitude_deg_east, elevation_m):
+    return _site(latitude_deg, longitude_deg_east, elevation_m)

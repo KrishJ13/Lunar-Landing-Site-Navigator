@@ -70,4 +70,24 @@ Errors are `{"error", "detail"}`: 422 invalid/non-finite input or non-UTC timest
 kernel coverage / SPICE failure; 503 kernels missing or unloadable (`/health` then reports
 `"status": "degraded"`); 500 unexpected (no stack trace returned).
 Kernels load once at startup; SPICE calls are serialised with a lock (CSPICE is not thread-safe).
+
+### Time series: `GET /api/v1/positions/series`
+
+    GET /api/v1/positions/series?lat=-89.5&lon=223&elevation_m=0&start_utc=2027-03-14T00:00:00Z&hours=168&step_minutes=60
+
+Params: `lat`, `lon`, `elevation_m` as above; `start_utc` (explicit UTC); `hours` in (0, 168];
+`step_minutes` in [10, 360]. Each sample uses the same `calculate_positions` math as `/positions`
+(values are identical to individual calls).
+
+Sampling: `t_k = start_utc + k*step_minutes`, k = 0..K, `K = floor(hours*60/step_minutes)`. The start is
+always included. The end instant (`end_utc` = start + hours) is included only if it lands exactly on a
+step (`end_included: true`); otherwise only samples before it are returned and `last_sample_utc` shows
+the final one. `sample_count = K + 1` is capped at 1000 (422 beyond; e.g. 168 h at 10 min = 1009).
+Response: `site`, `start_utc`, `end_utc`, `end_included`, `last_sample_utc`, `hours`, `step_minutes`,
+`sample_count`, `samples[{timestamp_utc, sun, earth}]`, and `model` once (not per sample;
+`terrain_occlusion_modelled: false`).
+All sample times are checked against SPICE kernel coverage before any evaluation; a span reaching
+outside it, or any failing sample, yields 400 (`ephemeris_unavailable`) with no partial result.
+The SPICE lock is taken per 50-sample chunk, so long series interleave with other requests.
+
 CORS: `http://localhost:5173` by default; override with `LUNAR_SKY_CORS_ORIGINS` (comma-separated).

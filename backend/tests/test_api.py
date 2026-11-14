@@ -73,7 +73,7 @@ def test_out_of_coverage(client):
     assert "Traceback" not in r.text
 
 
-def test_missing_kernels(monkeypatch):
+def test_missing_kernels(restore_spice_state, monkeypatch):
     def boom():
         raise RuntimeError("nope")
 
@@ -85,7 +85,7 @@ def test_missing_kernels(monkeypatch):
         assert r.status_code == 503 and "sun" not in r.json()
 
 
-def test_missing_files(monkeypatch, tmp_path):
+def test_missing_files(restore_spice_state, monkeypatch, tmp_path):
     monkeypatch.setattr(api, "KDIR", tmp_path)
     with TestClient(api.app) as c:
         assert c.get("/api/v1/health").json()["kernels_ready"] is False
