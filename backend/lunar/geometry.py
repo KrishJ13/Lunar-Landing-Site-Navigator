@@ -30,6 +30,15 @@ def _stack(x, y, z) -> np.ndarray:
     return np.stack(np.broadcast_arrays(x, y, z), axis=-1)
 
 
+def dot(a, b) -> np.ndarray:
+    """Dot product over the last axis, broadcasting (..., 3) against (3,).
+
+    Written out instead of using `@`: Apple's Accelerate BLAS, which numpy uses
+    on macOS, emits spurious overflow warnings for matmul on these shapes.
+    """
+    return np.sum(np.asarray(a) * np.asarray(b), axis=-1)
+
+
 def unit_up(lat, lon) -> np.ndarray:
     """Unit vector from the Moon's centre through (lat, lon): local 'up'."""
     phi, lam = np.radians(lat), np.radians(lon)
@@ -122,9 +131,7 @@ def look_angles(observer, targets, basis):
     """
     east, north, up = basis
     rho = np.asarray(targets, dtype=float) - np.asarray(observer, dtype=float)
-    e = rho @ np.asarray(east)
-    n = rho @ np.asarray(north)
-    u = rho @ np.asarray(up)
+    e, n, u = dot(rho, east), dot(rho, north), dot(rho, up)
     rng = np.sqrt(e * e + n * n + u * u)
     elevation = np.degrees(np.arcsin(np.clip(u / rng, -1.0, 1.0)))
     azimuth = np.mod(np.degrees(np.arctan2(e, n)), 360.0)

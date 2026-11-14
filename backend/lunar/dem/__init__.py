@@ -8,7 +8,7 @@ Typical use:
     h = height_at(products, lat=-89.45, lon=222.69)   # metres above 1737.4 km
 """
 
-from .catalog import CATALOG, ProductInfo, best_product, height_at, load_available
+from .catalog import CATALOG, ProductInfo, best_product, height_at, heights_at, load_available
 from .product import DemProduct
 
 __all__ = [
@@ -17,5 +17,6 @@ __all__ = [
     "ProductInfo",
     "best_product",
     "height_at",
+    "heights_at",
     "load_available",
 ]

@@ -9,6 +9,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+plots = [
+    "matplotlib>=3.8",  # only for scripts/ray_section.py debug plots
+]
 dev = [
     "pytest>=8",
 ]

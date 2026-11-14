@@ -46,12 +46,15 @@ lunar/
   config.py            constants (Moon radius, data folder)
   geometry.py          component 2: 3D positions, East/North/Up frame,
                        walking along the surface, azimuth/elevation to a point
+  horizon.py           component 3: walk one compass direction, find the skyline
   dem/                 component 1: elevation data
     pds_label.py       read PDS3 .lbl files
     projections.py     lat/lon <-> pixel (cylindrical, polar stereographic)
     product.py         one elevation map: memory-mapped grid + height lookup
     catalog.py         known maps, download tiers, pick the best map for a point
 scripts/fetch_dem.py   download maps from PDS
+scripts/ray_section.py plot a terrain cross-section along one direction
+                       (needs: pip install -e ".[plots]"; writes to output/)
 tests/
 ```
 

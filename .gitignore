@@ -26,3 +26,6 @@ __pycache__/
 
 # Downloaded elevation maps (hundreds of MB to GBs; fetch with backend/scripts/fetch_dem.py)
 backend/data/
+
+# Generated plots from backend/scripts
+backend/output/

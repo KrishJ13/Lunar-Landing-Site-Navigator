@@ -93,3 +93,26 @@ def best_product(products: list[DemProduct], lat: float, lon: float) -> DemProdu
 def height_at(products: list[DemProduct], lat: float, lon: float) -> float:
     """Terrain height (m above 1737.4 km sphere) from the best available map."""
     return best_product(products, lat, lon).height_m(lat, lon)
+
+
+def heights_at(products: list[DemProduct], lat, lon):
+    """Vectorised height lookup over many points, each from its finest map.
+
+    Maps are tried finest-first; each point takes its height from the first
+    map that covers it. Returns (heights_m, pixel_size_m) arrays, the second
+    recording which resolution each height came from. Points no map covers
+    are NaN in both.
+    """
+    lat, lon = np.broadcast_arrays(np.atleast_1d(lat), np.atleast_1d(lon))
+    heights = np.full(lat.shape, np.nan)
+    pixel_size = np.full(lat.shape, np.nan)
+    for product in sorted(products, key=lambda p: p.pixel_size_m):
+        todo = np.isnan(heights)
+        if not todo.any():
+            break
+        h = product.heights_m(lat[todo], lon[todo])
+        found = ~np.isnan(h)
+        idx = np.flatnonzero(todo)[found]
+        heights.flat[idx] = h[found]
+        pixel_size.flat[idx] = product.pixel_size_m
+    return heights, pixel_size
