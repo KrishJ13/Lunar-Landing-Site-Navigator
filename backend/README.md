@@ -32,6 +32,24 @@ git ignores.
 The whole Moon is covered by the global map. The polar maps add finer detail
 near the poles. For each point, the finest map that covers it is used.
 
+## Running the API
+
+```bash
+.venv/bin/uvicorn lunar.api.app:app --reload        # http://127.0.0.1:8000, docs at /docs
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/horizon -H 'Content-Type: application/json' \
+  -d '{"lat": -89.45, "lon": 222.69, "observer_heights_m": [2, 10], "azimuth_step_deg": 0.5}'
+```
+
+`POST /api/horizon` returns `site` (normalised lon, ground height, map used),
+`settings`, `meta` (frame and conventions) and one `skylines[]` entry per
+observer height. Each entry holds same-length arrays in azimuth order:
+`azimuth_deg`, `elevation_deg`, `distance_km`, `terrain_m`, `skyline_lat`,
+`skyline_lon`, `map_pixel_size_m`, `at_max_range`. `GET /api/health` lists
+the loaded maps. CORS allows the Vite dev server (`LUNAR_CORS_ORIGINS` overrides).
+
 ## Tests
 
 ```bash
@@ -48,6 +66,7 @@ lunar/
                        walking along the surface, azimuth/elevation to a point
   horizon.py           component 3: walk one compass direction, find the skyline
   skyline.py           component 4: the full 360 deg skyline, several observer heights
+  api/                 component 5: FastAPI app (app.py) and JSON shapes (schemas.py)
   dem/                 component 1: elevation data
     pds_label.py       read PDS3 .lbl files
     projections.py     lat/lon <-> pixel (cylindrical, polar stereographic)

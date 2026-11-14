@@ -66,6 +66,7 @@ class HorizonProfile:
     ground_m: float
     height_above_ground_m: float
     site_pixel_size_m: float
+    site_map_name: str
     max_range_m: float
     azimuth_deg: np.ndarray
     elevation_deg: np.ndarray  # skyline angle above the horizontal plane
@@ -116,6 +117,7 @@ def skyline_for_observer(rays: TerrainRays, observer: Observer, max_range_m: flo
         ground_m=observer.ground_m,
         height_above_ground_m=observer.height_above_ground_m,
         site_pixel_size_m=observer.site_pixel_size_m,
+        site_map_name=observer.site_map_name,
         max_range_m=max_range_m,
         azimuth_deg=rays.azimuth_deg,
         elevation_deg=elevation[rows, best],

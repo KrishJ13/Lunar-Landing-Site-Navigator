@@ -42,6 +42,7 @@ class Observer:
     position: np.ndarray  # (3,) Moon-fixed vector of the eye
     basis: tuple  # (east, north, up) unit vectors at the site
     site_pixel_size_m: float  # resolution of the map the site height came from
+    site_map_name: str  # which elevation map the site height came from
 
     @property
     def eye_m(self) -> float:
@@ -87,6 +88,7 @@ def make_observer(
         position=surface_vector(lat, lon, ground + height_above_ground_m),
         basis=enu_basis(lat, lon),
         site_pixel_size_m=site_map.pixel_size_m,
+        site_map_name=site_map.name,
     )
 
 
