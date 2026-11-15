@@ -16,7 +16,9 @@ const VIEWS = [
   ['first-person', 'First-person 360°'],
   ['overhead', 'Overhead (orbit)'],
 ]
-const SECTION_TIMEOUT_MS = 30_000
+// A site never seen before downloads elevation maps and computes its horizon maps (measured 14-55 s
+// cold, about 3 s warm), and the sections share one server, so 30 s cut off valid first builds.
+const SECTION_TIMEOUT_MS = 120_000
 
 const sameSite = (a, b) => a && b && a.lat === b.lat && a.lon === b.lon && a.diameterKm === b.diameterKm &&
   a.eyeHeightM === b.eyeHeightM
@@ -92,7 +94,7 @@ export default function SkylineV3() {
         if (inFlight.current === controller) receive({ ...data, receivedMs: performance.now() - start })
       } catch (err) {
         if (inFlight.current === controller) {
-          const detail = timeout.aborted ? 'Timed out after 30 seconds.' : err.message
+          const detail = timeout.aborted ? `Timed out after ${SECTION_TIMEOUT_MS / 1000} seconds.` : err.message
           setErrors((current) => [...current, `Could not load ${label}. ${detail}`])
         }
       } finally {

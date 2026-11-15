@@ -16,6 +16,9 @@ fraction = sum(visible) / sum(2h).
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 
 from .config import MOON_RADIUS_M as R
@@ -23,6 +26,8 @@ from .geometry import dot, enu_basis, unit_up
 
 DISC_COLUMNS = 16
 DARK = 0.001  # below this visible fraction a point counts as dark
+CHUNK_ELEMENTS = 60_000  # (time step, point) pairs per vectorised pass (bounds temporaries to ~50 MB)
+WORKERS = min(6, os.cpu_count() or 1)
 
 
 def horizon_at(horizon_deg, step_deg, azimuth_deg, rows=None):
@@ -34,7 +39,9 @@ def horizon_at(horizon_deg, step_deg, azimuth_deg, rows=None):
     i1 = (i0 + 1) % count
     t = a - np.floor(a)
     rows = (np.arange(horizon_deg.shape[0]) if rows is None else rows)[:, None]
-    return horizon_deg[rows, i0] * (1 - t) + horizon_deg[rows, i1] * t
+    flat = np.ascontiguousarray(horizon_deg).reshape(-1)  # one flat gather is faster than 2-D fancy indexing
+    base = rows * count
+    return flat.take(base + i0) * (1 - t) + flat.take(base + i1) * t
 
 
 def visible_fraction(horizon_deg, step_deg, azimuth_deg, elevation_deg, radius_deg, columns=DISC_COLUMNS, rows=None):
@@ -68,17 +75,28 @@ def illumination_series(hm, sun_m, sun_radius_m):
     lit = np.zeros((len(sun_m),) + inside.shape, dtype=float)
     sun_m = np.asarray(sun_m, float)
     count = len(position)
-    chunk = max(1, 400_000 // max(count, 1))  # time steps per vectorised pass
-    for k0 in range(0, len(sun_m), chunk):
+    maps = np.ascontiguousarray(maps)
+    chunk = max(1, CHUNK_ELEMENTS // max(count, 1))  # time steps per vectorised pass
+    point_rows = np.arange(count)
+
+    def run(k0):
         s = sun_m[k0:k0 + chunk]  # (T, 3)
         v = s[:, None, :] - position[None, :, :]  # (T, N, 3)
         dist = np.linalg.norm(v, axis=-1)
         az = np.degrees(np.arctan2(dot(v, east), dot(v, north)))
         el = np.degrees(np.arcsin(np.clip(dot(v, up) / dist, -1, 1)))
         radius = np.degrees(np.arcsin(sun_radius_m / dist))
-        rows = np.tile(np.arange(count), len(s))
+        rows = np.tile(point_rows, len(s))
         frac = visible_fraction(maps, step, (az + gamma).ravel(), el.ravel(), radius.ravel(), rows=rows)
         lit[k0:k0 + len(s), inside] = frac.reshape(len(s), count)
+
+    starts = range(0, len(sun_m), chunk)
+    if WORKERS > 1 and len(starts) > 1:
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            list(pool.map(run, starts))  # list() re-raises a worker's error
+    else:
+        for k0 in starts:
+            run(k0)
     vc = sun_m - c_pos
     centre_az = np.degrees(np.arctan2(dot(vc, c_east), dot(vc, c_north))) % 360.0
     centre_el = np.degrees(np.arcsin(dot(vc, c_up) / np.linalg.norm(vc, axis=-1)))

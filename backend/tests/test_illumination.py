@@ -114,3 +114,30 @@ def test_window_matches_the_map_across_the_longitude_seam(make_cylindrical):
     np.testing.assert_array_equal(w.heights_m(lat, lon), product.heights_m(lat, lon))
     far = np.array([60.0]), np.array([180.0])  # outside the window: falls back to the map
     np.testing.assert_array_equal(w.heights_m(*far), product.heights_m(*far))
+
+
+def test_threaded_illumination_and_far_rays_equal_the_sequential_result(make_cylindrical, monkeypatch):
+    """The speed-ups (thread pools over time chunks and over far-ray nodes) change no value."""
+    from lunar import illumination
+    from lunar.horizon_maps import compute_block
+
+    def hills(lat, lon):
+        return 0.3 * np.sin(np.radians(lat) * 400) * np.cos(np.radians(lon) * 300)
+
+    products = [DemProduct.open(make_cylindrical(hills, ppd=64))]
+    near, far = map_surfaces(products, 60.0)
+    block = lambda workers: compute_block(near, far, 10.0, 20.0, -2_000.0, -2_000.0, 17, 17, 250.0,
+                                          max_range_m=60_000.0, sub_step=4, far_workers=workers)
+    np.testing.assert_array_equal(block(1)["horizon_deg"], block(4)["horizon_deg"])
+
+    _, _, hm = _maps(products, 10.0, 20.0, 5_000, mast_height_m=2.0)
+    east, north, up = enu_basis(10.0, 20.0)
+    angles = np.radians(np.linspace(-4.0, 6.0, 40))
+    suns = np.array([1.496e11 * (np.cos(a) * north + np.sin(a) * up) for a in angles])
+    monkeypatch.setattr(illumination, "CHUNK_ELEMENTS", 300)  # several chunks, so the pool really runs
+    monkeypatch.setattr(illumination, "WORKERS", 1)
+    sequential, *_ = illumination_series(hm, suns, 6.957e8)
+    monkeypatch.setattr(illumination, "WORKERS", 4)
+    threaded, *_ = illumination_series(hm, suns, 6.957e8)
+    np.testing.assert_array_equal(sequential, threaded)
+    assert 0.0 < sequential[hm.in_disc[None].repeat(len(suns), 0)].mean() < 1.0  # partial lighting was exercised

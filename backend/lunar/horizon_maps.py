@@ -39,7 +39,9 @@ Two parts, H = max(H_near, H_far)
 
 from __future__ import annotations
 
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -56,6 +58,7 @@ DEFAULT_AZIMUTH_STEP_DEG = 1.0
 DEFAULT_MAST_HEIGHT_M = 2.0
 NEAR_TARGET_M = 60.0  # near-grid spacing target: the ~59 m maps (ldem_512 / SLDEM2015)
 FAR_MIN_STEP_M = 240.0  # far rays: the ldem_128 cell (236.9 m)
+FAR_WORKERS = min(8, os.cpu_count() or 1)  # threads for the far rays (numpy releases the GIL)
 
 
 @dataclass
@@ -160,7 +163,8 @@ def map_surfaces(products, near_spacing_m):
 
 def compute_block(near_surface, far_surface, lat0, lon0, x0, y0, nx, ny, spacing, *,
                   mast_height_m=DEFAULT_MAST_HEIGHT_M, azimuth_step_deg=DEFAULT_AZIMUTH_STEP_DEG,
-                  max_range_m=300_000.0, near_target_m=NEAR_TARGET_M, sub_step=8, near_radius_m=None):
+                  max_range_m=300_000.0, near_target_m=NEAR_TARGET_M, sub_step=8, near_radius_m=None,
+                  far_workers=FAR_WORKERS):
     """Horizon maps for the nodes x = x0 + i s, y = y0 + j s (i < nx, j < ny) of the
     azimuthal-equidistant plane centred on (lat0, lon0). Far rays start from
     every sub_step-th node (and the last); near rays reach near_radius + g sqrt 2,
@@ -271,16 +275,24 @@ def compute_block(near_surface, far_surface, lat0, lon0, x0, y0, nx, ny, spacing
         far_surface.preload(np.concatenate(clat), np.concatenate(clon))
     far_h = np.empty(gj.shape + (len(a),))
     far_dist = np.empty_like(far_h)
-    for jj in range(gj.shape[0]):
-        for ii in range(gj.shape[1]):
-            j, i = gj[jj, ii], gi[jj, ii]
-            bearing = azimuths - gamma[j, i]  # grid azimuth -> true bearing
-            rlat, rlon = destination(plat[j, i], plon[j, i], bearing[:, None], far_d[None, :])
-            elev = _elevation(far_surface(rlat, rlon), gh[jj, ii], far_d[None, :])
-            elev = np.where(np.isfinite(elev), elev, -np.inf)
-            top = np.argmax(elev, axis=1)
-            far_h[jj, ii] = elev[np.arange(len(a)), top]
-            far_dist[jj, ii] = far_d[top]
+
+    def far_node(jj, ii):  # nodes are independent and write disjoint slices
+        j, i = gj[jj, ii], gi[jj, ii]
+        bearing = azimuths - gamma[j, i]  # grid azimuth -> true bearing
+        rlat, rlon = destination(plat[j, i], plon[j, i], bearing[:, None], far_d[None, :])
+        elev = _elevation(far_surface(rlat, rlon), gh[jj, ii], far_d[None, :])
+        elev = np.where(np.isfinite(elev), elev, -np.inf)
+        top = np.argmax(elev, axis=1)
+        far_h[jj, ii] = elev[np.arange(len(a)), top]
+        far_dist[jj, ii] = far_d[top]
+
+    nodes = [(jj, ii) for jj in range(gj.shape[0]) for ii in range(gj.shape[1])]
+    if far_workers > 1 and len(nodes) > 1:
+        with ThreadPoolExecutor(max_workers=far_workers) as pool:
+            list(pool.map(lambda node: far_node(*node), nodes))  # list() re-raises a worker's error
+    else:
+        for node in nodes:
+            far_node(*node)
     timings["far"] = time.perf_counter() - t2
 
     # Bilinear in the sub-grid with a height correction per corner (radians,
