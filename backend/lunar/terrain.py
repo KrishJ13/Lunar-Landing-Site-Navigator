@@ -37,9 +37,10 @@ import numpy as np
 
 from .config import MOON_RADIUS_M
 from .dem import best_product, heights_at
-from .geometry import destination, dot, enu_basis, look_angles, surface_vector
+from .geometry import destination, dot, enu_basis, look_angles, surface_vector, unit_up
 from .horizon import DEFAULT_RELATIVE_STEP, sample_distances
 from .foreground import FOREGROUND_BLEND_M, ForegroundSurface
+from .despike import despike
 from .lola_chain import LolaChain
 from .panorama import render_panorama
 
@@ -73,9 +74,16 @@ class SiteTerrain:
     ray_skyline_deg: np.ndarray | None = None  # (A,) at far_azimuth_deg
     ray_skyline_distance_m: np.ndarray | None = None  # (A,)
     panorama_shade: np.ndarray | None = None  # (elevation rows, azimuth columns)
+    panorama_normal: np.ndarray | None = None  # (rows, columns, 2) float16 east, north of the site-frame normal
+    panorama_distance: np.ndarray | None = None  # (rows, columns) float32 ground distance of each pixel, m
     foreground_map: str | None = None
     foreground_pixel_m: float | None = None
     elevation_maps: list[str] | None = None
+    # Server-side only (not sent to the browser): surface(lat, lon) -> height_m,
+    # the surface the panorama is drawn from (lunar.horizon_maps uses it).
+    surface: object = None
+    surround: dict | None = None  # optional coarser grid around the site (build_site_terrain surround_m)
+    site_despiked: int = 0  # site-grid nodes changed by lunar.despike
 
     @property
     def eye_m(self) -> float:
@@ -126,13 +134,17 @@ def build_site_terrain(
     with_far_mesh: bool = True,
     with_panorama: bool = False,
     with_lola_chain: bool = False,
+    chain_maps: tuple[str, str, str] | None = None,
+    despike_grids: bool = False,
+    surround_m: float = 0.0,
 ) -> SiteTerrain:
     timings = {}
     t0 = time.perf_counter()
 
     # Site grid spacing: the requested density, but never finer than the map.
     target = diameter_m / points_across
-    chain = LolaChain(products, lat, lon) if with_lola_chain else None
+    chain = (LolaChain(products, lat, lon, **({"maps": chain_maps} if chain_maps else {}))
+             if with_lola_chain else None)
     site_map = chain.global_maps[0] if chain is not None else best_product(products, lat, lon, target_m=target)
     spacing = max(target, float(site_map.pixel_size_m))
     xy = site_grid_xy(diameter_m, spacing)
@@ -159,6 +171,9 @@ def build_site_terrain(
         if chain is None and len(products) > 1:
             close = dist < FOREGROUND_BLEND_M
             s_h[close] = foreground.blend(s_h[close], x[close], y[close], dist[close])
+    despiked = 0
+    if despike_grids:
+        s_h, despiked = despike(s_h, spacing, float(site_map.pixel_size_m))
     centre = len(xy) // 2
     ground = float(s_h[centre, centre])
     if not np.isfinite(ground):
@@ -168,6 +183,29 @@ def build_site_terrain(
     eye_position = surface_vector(lat, lon, ground + eye_height_m)
     basis = enu_basis(lat, lon)
     site_enu = to_enu(s_lat, s_lon, s_h, eye_position, basis)
+
+    # Optional surround: a coarser grid out to surround_m beyond the site edge (for
+    # context around the landing site in the overhead view), from the same surface.
+    surround = None
+    if surround_m > 0:
+        outer = diameter_m / 2 + surround_m
+        u_spacing = max(2 * outer / 240, float(site_map.pixel_size_m))
+        u_xy = site_grid_xy(2 * outer, u_spacing)
+        ux, uy = np.meshgrid(u_xy, u_xy)
+        u_az, u_dist = np.degrees(np.arctan2(ux, uy)), np.hypot(ux, uy)
+        u_lat, u_lon = destination(lat, lon, u_az, u_dist)
+        keep = (np.hypot(np.maximum(np.abs(ux) - u_spacing, 0), np.maximum(np.abs(uy) - u_spacing, 0)) <= outer) & \
+            (u_dist >= diameter_m / 2 - 2 * u_spacing)
+        u_h = np.full(ux.shape, np.nan)
+        if chain is not None:
+            u_h[keep] = chain.sample(u_lat[keep], u_lon[keep], u_az[keep], u_dist[keep])[0]
+        else:
+            u_h[keep] = heights_at(products, u_lat[keep], u_lon[keep], target_m=u_spacing)[0]
+        u_despiked = 0
+        if despike_grids:
+            u_h, u_despiked = despike(u_h, u_spacing, max(u_spacing, float(site_map.pixel_size_m)))
+        surround = {"xy_m": u_xy, "enu": to_enu(u_lat, u_lon, u_h, eye_position, basis), "height_m": u_h,
+                    "spacing_m": u_spacing, "outer_m": outer, "despiked": u_despiked}
 
     azimuths = np.arange(0.0, 360.0, far_azimuth_step_deg)
     rings = np.empty(0)
@@ -181,10 +219,10 @@ def build_site_terrain(
         timings["far_heights"] = time.perf_counter() - t1
         far_enu = to_enu(f_lat, f_lon, f_h, eye_position, basis)
 
-    sky_el = sky_d = panorama = None
+    sky_el = sky_d = panorama = panorama_normal = panorama_distance = None
     if with_panorama:
         t2 = time.perf_counter()
-        sky_el, sky_d, panorama = render_panorama(
+        sky_el, sky_d, panorama, panorama_normal, panorama_distance = render_panorama(
             products, lat, lon, azimuths, ground + eye_height_m,
             spacing, max_range_m, far_target_m, foreground, chain=chain,
         )
@@ -204,10 +242,34 @@ def build_site_terrain(
         far_enu=far_enu, far_height_m=f_h, far_pixel_m=f_px, timings_s=timings,
         ray_skyline_deg=sky_el, ray_skyline_distance_m=sky_d,
         panorama_shade=panorama,
+        panorama_normal=panorama_normal,
+        panorama_distance=panorama_distance,
         foreground_map=foreground.name if foreground is not None else None,
         foreground_pixel_m=float(foreground.pixel_size_m) if foreground is not None else None,
         elevation_maps=chain.maps if chain is not None else None,
+        surface=_surface(products, chain, lat, lon, spacing),
+        surround=surround,
+        site_despiked=despiked,
     )
+
+
+def _surface(products, chain, lat, lon, spacing):
+    """surface(lat, lon) -> height_m: the heights the panorama is drawn from.
+    The LOLA chain blends maps by distance from the eye, so it needs each
+    point's bearing and distance from the site: for unit vector U,
+    distance = R acos(U . U0), bearing = atan2(U . E, U . N)."""
+    if chain is not None:
+        east, north, up = enu_basis(lat, lon)
+
+        def surface(qlat, qlon):
+            u = unit_up(qlat, qlon)
+            distance = MOON_RADIUS_M * np.arccos(np.clip(dot(u, up), -1.0, 1.0))
+            bearing = np.degrees(np.arctan2(dot(u, east), dot(u, north)))
+            return chain.sample(qlat, qlon, bearing, distance)[0]
+        return surface
+    if len(products) == 1:
+        return products[0].heights_m
+    return lambda qlat, qlon: heights_at(products, qlat, qlon, target_m=spacing)[0]
 
 
 def ray_skyline(products, lat, lon, eye_position, basis, azimuths_deg, site_radius_m, spacing_m,

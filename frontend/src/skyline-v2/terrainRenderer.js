@@ -1,6 +1,11 @@
 // Perspective renderer for the overhead landing-site disc.
+import { ALBEDO_SRGB, LIGHTING_GLSL } from './lighting.js'
+import { GRID_GLSL, GRID_UNIFORMS, gridUniforms } from './sequence.js'
 
 export const ELEVATION_COLORS = ['#252d5b', '#346186', '#4e928e', '#a6ba8f', '#f1dfb6']
+// Sequential ramp for illumination heatmaps (dark = little or no sunlight).
+export const HEAT_COLORS = ['#0b0b1e', '#3b1f63', '#8a2a6b', '#d2483f', '#f59a1b', '#fcf2a3']
+const heatPalette = HEAT_COLORS.flatMap((hex) => [1, 3, 5].map((start) => Number.parseInt(hex.slice(start, start + 2), 16) / 255))
 const elevationPalette = ELEVATION_COLORS.flatMap((hex) =>
   [1, 3, 5].map((start) => Number.parseInt(hex.slice(start, start + 2), 16) / 255),
 )
@@ -14,7 +19,9 @@ uniform mat4 u_viewProj;
 out vec2 v_xy;
 out vec3 v_normal;
 out float v_height;
+out vec3 v_pos;
 void main() {
+  v_pos = a_pos;
   v_xy = a_xy;
   v_normal = a_normal;
   v_height = a_height;
@@ -28,12 +35,20 @@ precision highp int;
 in vec2 v_xy;
 in vec3 v_normal;
 in float v_height;
+in vec3 v_pos;             // site ENU metres from the eye
 uniform float u_width;     // line width, device px
+uniform bool u_realSun;
+uniform vec3 u_camera;     // camera position, site ENU metres from the eye
 uniform float u_radius;    // landing-site radius, metres
 uniform bool u_showElevation;
 uniform vec2 u_elevationRange;
 uniform vec3 u_elevationColors[${ELEVATION_COLORS.length}];
+uniform vec3 u_heatColors[${HEAT_COLORS.length}];
+uniform int u_overlayMode;       // 0 none, 1 terrain shadow (lit fraction), 2 heatmap
+uniform sampler2D u_overlay;     // lattice grid nx x ny, 0..1 (sequence.js)
+${GRID_GLSL}
 out vec4 o;
+${LIGHTING_GLSL}
 
 vec3 elevationColor() {
   float span = u_elevationRange.y - u_elevationRange.x;
@@ -43,15 +58,39 @@ vec3 elevationColor() {
   return mix(u_elevationColors[low], u_elevationColors[low + 1], index - float(low));
 }
 
+vec3 heatColor(float t) {
+  float index = clamp(t, 0.0, 1.0) * float(u_heatColors.length() - 1);
+  int low = min(int(index), u_heatColors.length() - 2);
+  return mix(u_heatColors[low], u_heatColors[low + 1], index - float(low));
+}
+
+float overlayAt() {
+  return texture(u_overlay, gridUv(v_xy)).r;
+}
+
 void main() {
   float r = length(v_xy);
   if (r > u_radius) discard;
 
-  vec3 light = normalize(vec3(-0.72, 0.6, 0.34));
-  float shade = dot(normalize(v_normal), light);
-  vec3 col = vec3(0.21 + 0.49 * max(0.0, shade));
-  if (u_showElevation) {
-    col = elevationColor() * (0.78 + 0.36 * shade);
+  vec3 col;
+  if (u_overlayMode == 2) {
+    vec3 light = normalize(vec3(-0.72, 0.6, 0.34));
+    float shade = dot(normalize(v_normal), light);
+    col = heatColor(overlayAt()) * (0.82 + 0.3 * shade);
+  } else if (u_realSun) {
+    vec3 n = normalize(v_normal);
+    vec3 base = u_showElevation ? elevationColor() : vec3(${ALBEDO_SRGB.toFixed(3)});
+    float fixedShade = dot(n, normalize(vec3(-0.72, 0.6, 0.34)));
+    vec3 relief = u_showElevation ? base * (0.78 + 0.36 * fixedShade) : vec3(0.21 + 0.49 * max(0.0, fixedShade));
+    float seen = u_overlayMode == 1 ? overlayAt() : 1.0;
+    col = composeSunlit(relief, sunDirect(n, normalize(u_camera - v_pos), base), seen);
+  } else {
+    vec3 light = normalize(vec3(-0.72, 0.6, 0.34));
+    float shade = dot(normalize(v_normal), light);
+    col = vec3(0.21 + 0.49 * max(0.0, shade));
+    if (u_showElevation) {
+      col = elevationColor() * (0.78 + 0.36 * shade);
+    }
   }
 
   float edge = 1.0 - clamp(abs(r - u_radius) / max(fwidth(r), 1e-6) - (u_width * 0.5 - 0.5), 0.0, 1.0);
@@ -142,7 +181,9 @@ function compile(gl, type, src) {
   return sh
 }
 
-const UNIFORMS = ['u_viewProj', 'u_width', 'u_radius', 'u_showElevation', 'u_elevationRange', 'u_elevationColors[0]']
+const UNIFORMS = ['u_viewProj', 'u_width', 'u_radius', 'u_showElevation', 'u_elevationRange', 'u_elevationColors[0]',
+  'u_realSun', 'u_camera', 'u_sun', 'u_sunRadius', 'u_sunVisible', 'u_heatColors[0]', 'u_overlayMode', 'u_overlay',
+  ...GRID_UNIFORMS]
 
 export function createTerrainRenderer(canvas) {
   const gl = canvas.getContext('webgl2', { antialias: true })
@@ -155,9 +196,27 @@ export function createTerrainRenderer(canvas) {
   const loc = Object.fromEntries(UNIFORMS.map((u) => [u, gl.getUniformLocation(prog, u)]))
   gl.useProgram(prog)
   gl.uniform3fv(loc['u_elevationColors[0]'], elevationPalette)
+  gl.uniform3fv(loc['u_heatColors[0]'], heatPalette)
+  gl.uniform1i(loc.u_overlay, 0)
   const vao = gl.createVertexArray()
   const buffers = []
   let geom = null
+  const overlayTexture = gl.createTexture()
+  let overlay = null
+
+  /** Values 0..255 on the lattice grid (sequence.js seenAt plus a mode), or null. */
+  function setOverlay(next) {
+    overlay = next
+    if (!next) return
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, overlayTexture)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, next.nx, next.ny, 0, gl.RED, gl.UNSIGNED_BYTE, next.values)
+  }
 
   function attribute(name, data, size) {
     const buf = gl.createBuffer()
@@ -197,6 +256,21 @@ export function createTerrainRenderer(canvas) {
     gl.uniform2f(loc.u_elevationRange, ...geom.elevationRange)
     gl.uniform1f(loc.u_width, BOUNDARY_WIDTH_PX * view.dpr)
     gl.uniform1f(loc.u_radius, geom.radius)
+    const real = view.lighting?.mode === 'sun'
+    gl.uniform1i(loc.u_realSun, real ? 1 : 0)
+    if (real) {
+      gl.uniform3fv(loc.u_camera, view.camera)
+      gl.uniform3fv(loc.u_sun, view.lighting.sun)
+      gl.uniform1f(loc.u_sunRadius, view.lighting.sunRadius)
+      gl.uniform1f(loc.u_sunVisible, view.lighting.sunVisible)
+    }
+    const mode = overlay ? ({ shadow: 1, heat: 2 }[overlay.mode] ?? 0) : 0
+    gl.uniform1i(loc.u_overlayMode, mode)
+    if (mode) {
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, overlayTexture)
+      gridUniforms(gl, loc, overlay)
+    }
     gl.bindVertexArray(vao)
     gl.drawElements(gl.TRIANGLES, geom.faces.length, gl.UNSIGNED_INT, 0)
     gl.bindVertexArray(null)
@@ -205,10 +279,11 @@ export function createTerrainRenderer(canvas) {
   function dispose() {
     for (const b of buffers.splice(0)) gl.deleteBuffer(b)
     gl.deleteVertexArray(vao)
+    gl.deleteTexture(overlayTexture)
     gl.deleteProgram(prog)
   }
 
-  return { setGeometry, draw, dispose }
+  return { setGeometry, setOverlay, draw, dispose }
 }
 
 // ---------- overhead camera ----------

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import CompassStrip from '../components/CompassStrip.jsx'
-import { compassName, elevationStep, makeViewScale, wrap360 } from '../lib/view.js'
+import { angleDiff, compassName, elevationStep, makeViewScale, wrap360 } from '../lib/view.js'
+import { BODY_STYLE, skylineAt, visibleFraction, visibilityNote } from './bodies.js'
 import { sizeCanvas, useWidth } from './useCanvasSize.js'
 import { createPanoramaRenderer } from './panoramaRenderer.js'
+import { createSkyRenderer } from '../lib/skyShader.js'
 
 const FOV_OPTIONS = [5, 10, 20, 60, 90, 120, 180]
 const INITIAL_HEADING = 180
@@ -15,9 +17,16 @@ const clampPitch = (pitch, minPitch) => Math.max(minPitch, Math.min(MAX_PITCH, p
 /**
  * First-person 360° shaded terrain from the eye, at true proportions (1° up is as
  * large as 1° across). Drag or use the arrow keys to look around.
+ * Behind the terrain, a WebGL sky (lib/skyShader.js, as the original Lunar
+ * Skyline): stars, the Sun and the Earth at their true angular size, the Earth
+ * with its phase. `bodies` are the SPICE positions at the timeline step; the
+ * terrain hides them where the skyline is above them. `seen` is the shadow grid
+ * at that step (fraction of the Sun each point of the site sees).
  */
-export default function FirstPersonTerrain({ terrain, height = 440 }) {
+export default function FirstPersonTerrain({ terrain, bodies = null, lighting = { mode: 'fixed' }, seen = null, height = 440 }) {
   const wrapRef = useRef(null)
+  const skyRef = useRef(null)
+  const skyRendererRef = useRef(null)
   const glRef = useRef(null)
   const overlayRef = useRef(null)
   const width = useWidth(wrapRef)
@@ -52,6 +61,24 @@ export default function FirstPersonTerrain({ terrain, height = 440 }) {
     }
   }, [terrain])
 
+  useEffect(() => {
+    const sky = createSkyRenderer(skyRef.current)
+    skyRendererRef.current = sky
+    return () => {
+      sky?.dispose()
+      skyRendererRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    rendererRef.current?.setSeen(seen)
+  }, [terrain, seen])
+
+  const visibility = useMemo(
+    () => (bodies ? { sun: visibleFraction(bodies.sun, terrain), earth: visibleFraction(bodies.earth, terrain) } : null),
+    [bodies, terrain],
+  )
+
   const scale = useMemo(
     () => makeViewScale({ width, height: viewHeight, heading, pitch: viewPitch, fov, exaggeration: 1 }),
     [width, viewHeight, heading, viewPitch, fov],
@@ -59,13 +86,15 @@ export default function FirstPersonTerrain({ terrain, height = 440 }) {
 
   useEffect(() => {
     const dpr = sizeCanvas(glRef.current, width, viewHeight)
+    sizeCanvas(skyRef.current, width, viewHeight)
     sizeCanvas(overlayRef.current, width, viewHeight)
     const frame = requestAnimationFrame(() => {
-      rendererRef.current?.draw({ heading, pitch: viewPitch, fov, width, height: viewHeight })
-      drawOverlay(overlayRef.current.getContext('2d'), scale, dpr)
+      skyRendererRef.current?.render({ heading, pitch: viewPitch, pxPerDeg: width / fov, dpr, bodies, visibility })
+      rendererRef.current?.draw({ heading, pitch: viewPitch, fov, width, height: viewHeight, lighting })
+      drawOverlay(overlayRef.current.getContext('2d'), scale, dpr, terrain, bodies, visibility, !skyRendererRef.current)
     })
     return () => cancelAnimationFrame(frame)
-  }, [scale, heading, viewPitch, fov, width, viewHeight, terrain])
+  }, [scale, heading, viewPitch, fov, width, viewHeight, terrain, bodies, visibility, lighting, seen])
 
   const tilt = (deg) => setPitch((p) => clampPitch(clampPitch(p, minPitch) + deg, minPitch))
 
@@ -99,6 +128,7 @@ export default function FirstPersonTerrain({ terrain, height = 440 }) {
       <div className="v2-canvas-wrap" ref={wrapRef} tabIndex={0} onKeyDown={onKeyDown}>
         <CompassStrip heading={heading} fov={fov} />
         <div className="v2-stack" style={{ height: viewHeight }}>
+          <canvas ref={skyRef} className="v2-sky-canvas" style={{ width, height: viewHeight }} aria-hidden="true" />
           <canvas
             ref={glRef}
             className="v2-gl draggable"
@@ -129,14 +159,22 @@ export default function FirstPersonTerrain({ terrain, height = 440 }) {
         <button type="button" onClick={() => setPitch(clampPitch(0, minPitch))}>
           {minPitch > 0 ? 'Reset tilt' : 'Level view'}
         </button>
+        {bodies && Object.entries(BODY_STYLE).map(([key, { label }]) => (
+          <button key={key} type="button" onClick={() => {
+            setHeading(wrap360(bodies[key].azimuth_deg))
+            setPitch(clampPitch(bodies[key].elevation_deg, minPitch))
+          }}>
+            Look at {label}
+          </button>
+        ))}
         <span className="v2-muted">Pitch {viewPitch.toFixed(1)}° · drag or arrow keys (Shift = 1°)</span>
       </div>
     </div>
   )
 }
 
-/** Elevation labels and eye-level line. */
-function drawOverlay(ctx, scale, dpr) {
+/** Elevation labels, eye-level line, and the Sun and Earth labels. */
+function drawOverlay(ctx, scale, dpr, terrain, bodies, visibility, drawDiscs) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, scale.width, scale.height)
   ctx.font = '11px system-ui, sans-serif'
@@ -155,5 +193,58 @@ function drawOverlay(ctx, scale, dpr) {
     ctx.lineTo(scale.width, yEye)
     ctx.stroke()
     ctx.setLineDash([])
+  }
+  if (bodies) drawBodies(ctx, scale, terrain, bodies, visibility, drawDiscs)
+}
+
+/**
+ * Labels for the Sun and Earth, and a dashed outline where a body is behind the
+ * terrain. The discs themselves come from the sky shader; without WebGL2
+ * (drawDiscs) they are drawn here as flat circles, clipped to the sky.
+ */
+function drawBodies(ctx, scale, terrain, bodies, visibility, drawDiscs) {
+  const { width, height } = scale
+  ctx.font = '12px system-ui, sans-serif'
+  ctx.textAlign = 'center'
+  for (const [key, { label, colour }] of Object.entries(BODY_STYLE)) {
+    const b = bodies[key]
+    // Exact angular size: radius = angular radius (deg) x pixels per degree, no minimum.
+    const r = b.angular_radius_deg * scale.pxPerDegY
+    const x = width / 2 + angleDiff(b.azimuth_deg, scale.heading) * scale.pxPerDegX
+    const y = scale.y(b.elevation_deg)
+    if (x < -r - 80 || x > width + r + 80 || y < -r - 20 || y > height + r + 20) continue
+    const fraction = visibility?.[key] ?? visibleFraction(b, terrain)
+
+    if (drawDiscs) {
+      const sky = new Path2D()
+      sky.moveTo(0, -1)
+      for (let px = 0; px <= width; px++) sky.lineTo(px, scale.y(skylineAt(terrain, scale.azAt(px))))
+      sky.lineTo(width, -1)
+      sky.closePath()
+      ctx.save()
+      ctx.clip(sky)
+      ctx.beginPath()
+      ctx.arc(x, y, r, 0, 2 * Math.PI)
+      ctx.fillStyle = colour
+      ctx.fill()
+      ctx.restore()
+    }
+    if (fraction < 0.999) {
+      ctx.beginPath()
+      ctx.arc(x, y, Math.max(r, 2), 0, 2 * Math.PI)
+      ctx.setLineDash([3, 2])
+      ctx.lineWidth = 1.2
+      ctx.strokeStyle = colour
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    const note = visibilityNote(b, fraction)
+    const text = note ? `${label} (${note})` : label
+    ctx.lineWidth = 3
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)'
+    ctx.fillStyle = '#fff'
+    ctx.strokeText(text, x, y - r - 6)
+    ctx.fillText(text, x, y - r - 6)
   }
 }

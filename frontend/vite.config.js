@@ -12,6 +12,7 @@ export default defineConfig({
         moon: fileURLToPath(new URL('./moon.html', import.meta.url)),
         skyline: fileURLToPath(new URL('./skyline.html', import.meta.url)),
         skylineV2: fileURLToPath(new URL('./skyline-v2.html', import.meta.url)),
+        skylineV3: fileURLToPath(new URL('./skyline-v3.html', import.meta.url)),
       },
     },
   },

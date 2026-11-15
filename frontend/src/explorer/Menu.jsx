@@ -28,6 +28,12 @@ function Menu() {
               <p>Developer preview of a landing site's terrain, elevation, and local horizon.</p>
             </div>
           </a>
+          <a className="moon-menu-card moon-menu-skyline" href="./skyline-v3.html">
+            <div className="moon-menu-card-text">
+              <h2>Lunar Skyline V3 <span aria-hidden="true">↗</span></h2>
+              <p>Developer preview with terrain shadows across the whole view, through time.</p>
+            </div>
+          </a>
         </nav>
       </div>
     </main>

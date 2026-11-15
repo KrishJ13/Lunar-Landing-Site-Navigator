@@ -16,6 +16,7 @@ and shared by all requests.
 
 import os
 import threading
+import time
 from collections import OrderedDict
 
 import numpy as np
@@ -35,6 +36,7 @@ from ..ridgelines import find_peaks, link_ridgelines
 from ..ridges import compute_crests
 from ..site import SiteInfo, describe_site
 from ..skyline import HorizonProfile, compute_skyline
+from ..lola_chain import best_maps
 from ..terrain import FAR_TARGET_M, build_site_terrain, maps_used
 from . import terrain_payload
 from .schemas import (
@@ -57,11 +59,14 @@ from .schemas import (
     SmoothHorizon,
     SurroundingsInfo,
     SiteTerrainRequest,
+    IlluminationRequest,
+    ShadowFieldRequest,
     ViewRequest,
     ViewResponse,
 )
 
 TERRAIN_CACHE_SIZE = 8  # recent site packages kept in memory (each a few MB)
+LOG16_MAX_M = 400_000.0  # panorama_distance_log16: q = 65535 at 400 km
 
 EARTH_RADIUS_M = 6_371_000.0  # mean radius, only for the "same height on Earth" comparison
 
@@ -173,6 +178,9 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
             for spec in remote_specs() if spec.name in {"ldem_512", "ldem_256"}
         )
     app.state.terrain_cache = OrderedDict()
+    from ..horizon_tiles import HorizonTiles
+    app.state.horizon_tiles = (HorizonTiles(app.state.terrain_products, DEM_DIR / "cache" if products is None else None)
+                               if app.state.terrain_products else None)
     terrain_lock = threading.Lock()
 
     origins = os.environ.get("LUNAR_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
@@ -265,10 +273,11 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
     )
     def site_terrain(request: SiteTerrainRequest) -> Response:
         products = app.state.terrain_products
-        use_chain = request.elevation_product == "lola_chain"
+        use_chain = request.elevation_product in ("lola_chain", "best")
+        chain_maps = best_maps(request.lat) if request.elevation_product == "best" else None
         if use_chain:
             if not request.include_panorama or request.include_far_mesh:
-                raise HTTPException(422, "The LOLA chain requires a panorama without the legacy far mesh.")
+                raise HTTPException(422, "The map chain requires a panorama without the legacy far mesh.")
             products = app.state.lola_chain_products
         elif request.elevation_product is not None:
             matches = [product for product in products if product.name == request.elevation_product]
@@ -282,7 +291,7 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
         key = (round(request.lat, 6), round(lon, 6), request.diameter_km, request.observer_height_m,
                request.points_across, request.far_azimuth_step_deg, request.far_relative_step, request.max_range_km,
                request.include_far_mesh, request.include_ray_skyline, request.include_panorama,
-               request.elevation_product)
+               request.elevation_product, request.distance_log16, request.despike, request.surround_km)
         with terrain_lock:
             cached = app.state.terrain_cache.get(key)
             if cached is not None:
@@ -300,6 +309,9 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
                 with_ray_skyline=request.include_ray_skyline,
                 with_panorama=request.include_panorama,
                 with_lola_chain=use_chain,
+                chain_maps=chain_maps,
+                despike_grids=request.despike,
+                surround_m=request.surround_km * 1000,
             )
         except LookupError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -311,6 +323,10 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
             "site_height_m": t.site_height_m.astype(np.float32),
             "site_in_disc": t.in_disc().astype(np.uint8),
         }
+        if t.surround is not None:
+            arrays.update(surround_xy_m=t.surround["xy_m"].astype(np.float32),
+                          surround_enu_m=t.surround["enu"].astype(np.float32),
+                          surround_height_m=t.surround["height_m"].astype(np.float32))
         if request.include_far_mesh:
             arrays.update(
                 far_azimuth_deg=t.far_azimuth_deg.astype(np.float32),
@@ -324,11 +340,148 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
             arrays["ray_skyline_distance_m"] = t.ray_skyline_distance_m.astype(np.float32)
         if t.panorama_shade is not None:
             arrays["panorama_shade"] = t.panorama_shade
+            arrays["panorama_normal"] = t.panorama_normal
+            arrays["panorama_distance_m"] = t.panorama_distance.astype(np.float16)  # V2: used within the site only
+            if request.distance_log16:
+                d = np.clip(t.panorama_distance.astype(np.float64), 1.0, LOG16_MAX_M)
+                arrays["panorama_distance_log16"] = np.rint(np.log(d) / np.log(LOG16_MAX_M) * 65535).astype(np.uint16)
         payload = terrain_payload.encode(_terrain_header(t, request), arrays)
         with terrain_lock:
             app.state.terrain_cache[key] = payload
             while len(app.state.terrain_cache) > TERRAIN_CACHE_SIZE:
                 app.state.terrain_cache.popitem(last=False)
+        return Response(payload, media_type="application/octet-stream")
+
+    @app.post(
+        "/api/site/illumination",
+        response_class=Response,
+        responses={200: {"content": {"application/octet-stream": {}},
+                         "description": "Binary illumination payload (lunar.api.terrain_payload)"}},
+    )
+    def site_illumination(request: IlluminationRequest) -> Response:
+        """Horizon maps (cached per site) and the Sun's visible fraction over time."""
+        from lunar_sky import positions
+        from lunar_sky.api import _spice_lock
+
+        from ..horizon_maps import NEAR_TARGET_M, map_surfaces
+        from ..illumination import illumination_series, summarise
+
+        tiles = app.state.horizon_tiles
+        if tiles is None:
+            raise HTTPException(503, "No elevation maps available.")
+        lon = float(wrap_longitude(request.lon))
+        diameter = request.diameter_km * 1000
+        t0 = time.perf_counter()
+        try:
+            hm = tiles.site(request.lat, lon, diameter, request.mast_height_m)
+        except OSError as exc:
+            raise HTTPException(503, f"Elevation map server unavailable: {exc}") from exc
+        if not np.isfinite(hm.ground_m[hm.in_disc]).all():
+            raise HTTPException(422, "Elevation maps do not cover the whole site.")
+        near, _far = map_surfaces(app.state.terrain_products, NEAR_TARGET_M)
+        hm.centre_ground_m = float(near(np.array([request.lat]), np.array([lon]))[0])
+        t1 = time.perf_counter()
+        eye_m = hm.centre_ground_m + request.eye_height_m
+        try:
+            with _spice_lock:
+                times, bodies, sun_m, sun_radius_m = positions.body_series(
+                    request.lat, lon, eye_m, request.start_utc, request.hours, request.step_minutes)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        t2 = time.perf_counter()
+        lit, _az, _el = illumination_series(hm, sun_m, sun_radius_m)
+        mean, longest = summarise(lit, hm.in_disc, request.step_minutes / 60.0)
+        t3 = time.perf_counter()
+        header = {
+            "site": {"lat": request.lat, "lon": lon, "diameter_km": request.diameter_km,
+                     "mast_height_m": request.mast_height_m, "eye_m": round(eye_m, 2),
+                     "eye_height_m": request.eye_height_m},
+            "grid": {"nx": int(hm.in_disc.shape[1]), "ny": int(hm.in_disc.shape[0]), "spacing_m": hm.spacing_m,
+                     "frame_anchor": [hm.anchor[0], hm.anchor[1]],
+                     "first_m": [hm.i0 * hm.spacing_m, hm.j0 * hm.spacing_m],
+                     "site_to_frame": hm.affine.tolist(), "site_to_frame_residual_m": round(hm.affine_residual_m, 3),
+                     "layout": ("lattice nodes x = first_m[0] + i spacing, y = first_m[1] + j spacing (rows = y, "
+                                "cols = x) in the azimuthal-equidistant plane of frame_anchor; a site point (x, y) "
+                                "sits at frame A[:, :2] @ (x, y) + A[:, 2], A = site_to_frame"),
+                     "tiles": hm.stats},
+            "times": {"start_utc": times[0], "step_minutes": request.step_minutes, "count": len(times),
+                      "end_utc": times[-1]},
+            "method": ("Horizon maps (1 deg) per grid point; visible fraction of the Sun's disc (SPICE, LT+S) above "
+                       "the horizon at each time step; lunar.horizon_maps and lunar.illumination. Sun and Earth "
+                       "(sun_*/earth_*: azimuth, elevation, distance, angular radius) are apparent from the eye "
+                       "(site centre ground + eye_height_m), as GET /api/v1/positions."),
+            "timings_s": {"horizon_maps": round(t1 - t0, 3), "spice": round(t2 - t1, 3),
+                          "illumination": round(t3 - t2, 3)},
+        }
+        arrays = {
+            "node_site_xy_m": hm.site_xy_m.astype(np.float32),
+            "in_disc": hm.in_disc.astype(np.uint8),
+            "ground_m": hm.ground_m.astype(np.float32),
+            "lit": np.rint(lit * 255).astype(np.uint8),
+            "mean_lit": mean.astype(np.float32),
+            "longest_dark_h": longest.astype(np.float32),
+            **{f"{body}_{key}": values.astype(np.float32)
+               for body, columns in bodies.items() for key, values in columns.items()},
+        }
+        return Response(terrain_payload.encode(header, arrays), media_type="application/octet-stream")
+
+    field_cache: OrderedDict = OrderedDict()
+
+    @app.post(
+        "/api/site/shadow-field",
+        response_class=Response,
+        responses={200: {"content": {"application/octet-stream": {}},
+                         "description": "Binary nested height grids (lunar.shadow_field)"}},
+    )
+    def site_shadow_field(request: ShadowFieldRequest) -> Response:
+        """Nested height grids around the site, from the panorama's own surface."""
+        from ..lola_chain import LolaChain
+        from ..shadow_field import LEVELS, MAX_REACH_M, NO_DATA, SIZE, build_field
+        from ..terrain import _surface
+
+        lon = float(wrap_longitude(request.lon))
+        key = (round(request.lat, 6), round(lon, 6), request.elevation_product)
+        with terrain_lock:
+            cached = field_cache.get(key)
+            if cached is not None:
+                field_cache.move_to_end(key)
+                return Response(cached, media_type="application/octet-stream")
+        products = app.state.lola_chain_products
+        t0 = time.perf_counter()
+        try:
+            if request.elevation_product == "ldem_128":
+                chain = None
+                products = [min((p for p in products if p.name == "ldem_128"),
+                                key=lambda p: bool(getattr(p, "is_remote", False)))]
+            else:
+                maps = best_maps(request.lat) if request.elevation_product == "best" else None
+                chain = LolaChain(products, request.lat, lon, **({"maps": maps} if maps else {}))
+            if chain is not None:
+                source_cell = chain.normal_spacing
+            else:
+                source_cell = lambda d: products[0].pixel_size_m  # noqa: E731
+            field = build_field(_surface(products, chain, request.lat, lon, 60.0), request.lat, lon,
+                                source_cell=source_cell)
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(503, f"Elevation map server unavailable: {exc}") from exc
+        header = {
+            "site": {"lat": request.lat, "lon": lon},
+            "levels": [{k: g[k] for k in ("half_m", "size", "spacing_m", "lo_m", "scale_m", "max_m", "despiked")}
+                       for g in field],
+            "no_data": NO_DATA, "max_reach_m": MAX_REACH_M,
+            "layout": ("levels finest first; texel (i, j) centre at x = -half + (i + 1/2) 2 half / size (east), "
+                       "y likewise (north), in the site's azimuthal-equidistant plane; height = lo + q scale (m above "
+                       "the 1737.4 km sphere); q = no_data where no map covers the point"),
+            "levels_spec_m": list(LEVELS), "size": SIZE,
+            "timings_s": {"build": round(time.perf_counter() - t0, 3)},
+        }
+        payload = terrain_payload.encode(header, {"heights_q": np.stack([g["q"] for g in field])})
+        with terrain_lock:
+            field_cache[key] = payload
+            while len(field_cache) > 4:
+                field_cache.popitem(last=False)
         return Response(payload, media_type="application/octet-stream")
 
     @app.post("/api/ridges", response_model=RidgesResponse)
@@ -418,6 +571,7 @@ app = create_app()
 def _terrain_header(t, request: SiteTerrainRequest) -> dict:
     return {
         "elevation_product": request.elevation_product,
+        "distance_log16_max_m": LOG16_MAX_M if request.distance_log16 else None,
         "elevation_maps": t.elevation_maps,
         "site": {"lat": t.lat, "lon": t.lon, "ground_m": round(t.ground_m, 2),
                  "eye_height_m": t.eye_height_m, "eye_m": round(t.eye_m, 2),
@@ -427,12 +581,17 @@ def _terrain_header(t, request: SiteTerrainRequest) -> dict:
         "site_grid": {
             "layout": "azimuthal equidistant: x east, y north, metres along the surface; rows = y, cols = x",
             "spacing_m": round(t.spacing_m, 3), "points": int(len(t.site_xy_m)),
-            "map": t.site_map, "maps_used": maps_used(t.site_pixel_m),
+            "map": t.site_map, "maps_used": maps_used(t.site_pixel_m), "despiked": t.site_despiked,
         },
+        "surround": {"spacing_m": round(t.surround["spacing_m"], 3), "points": int(len(t.surround["xy_m"])),
+                     "outer_radius_m": t.surround["outer_m"], "despiked": t.surround["despiked"]}
+        if t.surround is not None else None,
         "skyline": {"azimuth_step_deg": request.far_azimuth_step_deg, "max_range_m": request.max_range_km * 1000}
         if t.ray_skyline_deg is not None else None,
         "panorama": {"rows": t.panorama_shade.shape[0], "columns": t.panorama_shade.shape[1],
                      "spike_correction": SPIKE_CORRECTION_STRENGTH,
+                     "normal": ("panorama_normal: float16 (rows, columns, 2) = east, north components of the "
+                                "unit surface normal in the site East/North/Up frame; up = sqrt(1 - e^2 - n^2)"),
                      "foreground_map": t.foreground_map, "foreground_pixel_m": t.foreground_pixel_m}
         if t.panorama_shade is not None else None,
         "far_mesh": {

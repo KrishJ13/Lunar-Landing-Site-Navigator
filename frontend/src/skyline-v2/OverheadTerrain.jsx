@@ -15,7 +15,7 @@ const formatElevation = new Intl.NumberFormat(undefined, { maximumFractionDigits
  * True vertical scale (no exaggeration). The amber circle is the landing-site
  * boundary; the yellow marker is the observer's eye.
  */
-export default function OverheadTerrain({ terrain, height = 440 }) {
+export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' }, overlay = null, height = 440 }) {
   const wrapRef = useRef(null)
   const glRef = useRef(null)
   const overlayRef = useRef(null)
@@ -29,7 +29,7 @@ export default function OverheadTerrain({ terrain, height = 440 }) {
   const drag = useRef(null)
   const { rendererRef, geometry, error } = useTerrainRenderer(glRef, terrain)
 
-  const viewProj = useMemo(() => {
+  const { viewProj, camera } = useMemo(() => {
     const target = [0, 0, -eye] // ground at the site centre, in ENU from the eye
     const y = (yaw * Math.PI) / 180
     const t = (tilt * Math.PI) / 180
@@ -39,18 +39,22 @@ export default function OverheadTerrain({ terrain, height = 440 }) {
       target[2] + distance * Math.sin(t),
     ]
     const proj = perspective(FOV_Y_DEG, width / height, distance / 100, distance * 20 + 400_000)
-    return multiply(proj, lookAt(cam, target))
+    return { viewProj: multiply(proj, lookAt(cam, target)), camera: cam }
   }, [yaw, tilt, distance, eye, width, height])
+
+  useEffect(() => {
+    rendererRef.current?.setOverlay(overlay)
+  }, [rendererRef, geometry, overlay])
 
   useEffect(() => {
     const dpr = sizeCanvas(glRef.current, width, height)
     sizeCanvas(overlayRef.current, width, height)
     const frame = requestAnimationFrame(() => {
-      rendererRef.current?.draw({ viewProj, showElevation, dpr })
+      rendererRef.current?.draw({ viewProj, camera, lighting, showElevation, dpr })
       drawOverlay(overlayRef.current.getContext('2d'), viewProj, width, height, dpr, diameter, eye)
     })
     return () => cancelAnimationFrame(frame)
-  }, [rendererRef, geometry, viewProj, showElevation, width, height, diameter, eye])
+  }, [rendererRef, geometry, viewProj, camera, lighting, overlay, showElevation, width, height, diameter, eye])
 
   useEffect(() => {
     const el = glRef.current
@@ -102,7 +106,7 @@ export default function OverheadTerrain({ terrain, height = 440 }) {
         </label>
         <span className="v2-muted">Drag to orbit, scroll to zoom. True vertical scale.</span>
       </div>
-      {showElevation && !error && <ElevationLegend range={geometry.elevationRange} />}
+      {showElevation && !error && overlay?.mode !== 'heat' && <ElevationLegend range={geometry.elevationRange} />}
     </div>
   )
 }

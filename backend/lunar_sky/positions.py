@@ -118,6 +118,49 @@ def _evaluate(et, obspos, enu):
     return out
 
 
+ILLUMINATION_MAX_SAMPLES = 10000  # e.g. 3 months at 15 min
+ILLUMINATION_MAX_HOURS = 24 * 400  # about 13 lunar days
+
+
+def body_series(latitude_deg, longitude_deg_east, elevation_m, start_utc, hours, step_minutes):
+    """Apparent Sun and Earth for the observer at the site, every step from start_utc for `hours`
+    (t_k = start + k step, k = 0..floor(hours*60/step)), evaluated as calculate_positions
+    (spkcpo, LT+S, MOON_ME_DE440_ME421, refloc OBSERVER). Caller holds the SPICE lock.
+    Returns (UTC timestamps, {"sun"|"earth": {"azimuth_deg", "elevation_deg", "distance_km",
+    "angular_radius_deg"} arrays}, sun_m (T, 3) Moon-fixed Sun centres in metres, Sun radius m)."""
+    start = _validate(latitude_deg, longitude_deg_east, elevation_m, start_utc)
+    if not (0 < hours <= ILLUMINATION_MAX_HOURS):
+        raise ValueError(f"hours must be > 0 and <= {ILLUMINATION_MAX_HOURS}")
+    if not (15.0 <= step_minutes <= MAX_STEP_MIN):
+        raise ValueError(f"step_minutes must be in [15, {MAX_STEP_MIN:g}]")
+    count = math.floor(hours * 60.0 / step_minutes + 1e-9) + 1
+    if count > ILLUMINATION_MAX_SAMPLES:
+        raise ValueError(f"the range has {count} time steps; the maximum is {ILLUMINATION_MAX_SAMPLES} "
+                         "(use a longer step or a shorter range)")
+    if sp.ktotal("ALL") == 0:
+        load_kernels()
+    obspos, enu = _site(latitude_deg, longitude_deg_east, elevation_m)
+    observer = np.asarray(obspos, float) * 1000.0
+    times, suns = [], []
+    columns = {key: {"azimuth_deg": [], "elevation_deg": [], "distance_km": [], "angular_radius_deg": []}
+               for key in _TARGETS}
+    try:
+        for k in range(count):
+            dt = start + timedelta(minutes=step_minutes * k)
+            et = _et(dt)
+            out = _evaluate(et, obspos, enu)
+            for key, body in out.items():
+                for name, value in body.items():
+                    columns[key][name].append(value)
+            state, _lt = sp.spkcpo("SUN", et, MOON_FRAME, "OBSERVER", ABCORR, list(obspos), "MOON", MOON_FRAME)
+            times.append(_fmt(dt))
+            suns.append(observer + np.asarray(state[:3], float) * 1000.0)
+    except sp.SpiceyError as e:
+        raise ValueError(f"SPICE could not evaluate this request (kernel coverage?): {e}") from None
+    bodies = {key: {name: np.asarray(v) for name, v in cols.items()} for key, cols in columns.items()}
+    return times, bodies, np.asarray(suns), BODY_RADIUS_KM["sun"] * 1000.0
+
+
 def model_metadata():
     manifest = json.loads((ROOT / "kernels_manifest.json").read_text())
     return {

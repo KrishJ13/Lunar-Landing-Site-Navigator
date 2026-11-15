@@ -13,7 +13,7 @@ from lunar.dem import DemProduct
 from lunar.foreground import correct_outliers
 from lunar.geometry import destination
 from lunar.lola_chain import LolaChain
-from lunar.panorama import _correct_isolated_peaks, _visible_shade
+from lunar.panorama import _correct_isolated_peaks, _foreground_normals, _normals, _visible_shade
 from lunar.skyline import compute_skyline
 from lunar.terrain import build_site_terrain, far_mesh_skyline, ring_distances, site_grid_xy
 
@@ -310,3 +310,61 @@ def test_site_only_payload_preserves_a_ridge_outside_the_footprint(make_polar):
     peak = np.argmax(arrays["ray_skyline_deg"])
     assert arrays["ray_skyline_deg"][peak] > 2
     assert arrays["ray_skyline_distance_m"][peak] > 2500
+
+
+def _sphere_normal(az_deg, d_m):
+    a, theta = np.radians(az_deg), np.asarray(d_m) / R
+    return np.stack(np.broadcast_arrays(np.sin(theta) * np.sin(a), np.sin(theta) * np.cos(a), np.cos(theta)), axis=-1)
+
+
+def test_normals_on_the_bare_sphere_are_the_local_vertical_in_the_site_frame():
+    # Bare sphere seen from an eye 1.8 m up: H = R sin(d/R), U = R cos(d/R) - R - 1.8.
+    az = np.arange(0.0, 360.0, 0.25)
+    d = np.linspace(10.0, 300_000.0, 6000)
+    theta = d / R
+    horizontal = np.broadcast_to(R * np.sin(theta), (len(az), len(d))).copy()
+    up = np.broadcast_to(R * np.cos(theta) - R - 1.8, (len(az), len(d))).copy()
+    n = _normals(horizontal, up, d, az, np.full(d.shape, 100.0))
+    expected = _sphere_normal(az[:, None], d[None, :])
+    angle = np.degrees(np.arccos(np.clip(np.sum(n * expected, axis=-1), -1, 1)))
+    assert angle[:, 1:-1].max() < 1e-4  # degrees; 300 km away the vertical has turned 9.89 deg
+    assert np.degrees(np.arccos(n[0, -2, 2])) == pytest.approx(np.degrees(d[-2] / R), abs=1e-4)
+
+
+def test_normals_of_a_tilted_plane():
+    # A plane rising northwards with slope s (no curvature): U = s * north - eye.
+    s = 0.2
+    az = np.arange(0.0, 360.0, 0.5)
+    d = np.linspace(5.0, 2_000.0, 800)
+    a = np.radians(az)[:, None]
+    horizontal = np.broadcast_to(d, (len(az), len(d))).copy()
+    up = s * d[None, :] * np.cos(a) - 1.8
+    n = _normals(horizontal, up, d, az, np.full(d.shape, 5.0))
+    expected = np.array([0.0, -s, 1.0]) / np.hypot(s, 1.0)
+    assert np.abs(n[:, 1:-1] - expected).max() < 1e-9
+
+
+def test_foreground_normals_include_the_curvature():
+    az = np.arange(0.0, 360.0, 10.0)
+    d = np.array([1.0, 100.0, 320.0])
+    zero = np.zeros((len(az), len(d)))
+    np.testing.assert_allclose(_foreground_normals(zero, zero, az, d), _sphere_normal(az[:, None], d[None, :]),
+                               atol=1e-15)
+    # A slope of 0.1 east at the site itself: normal (0.1, 0, 1) / |.|.
+    n = _foreground_normals(np.full((1, 1), 0.1), np.zeros((1, 1)), np.array([0.0]), np.array([0.0]))
+    np.testing.assert_allclose(n[0, 0], np.array([0.1, 0.0, 1.0]) / np.hypot(0.1, 1.0), atol=1e-15)
+
+
+def test_panorama_normals_on_the_bare_sphere(flat_moon):
+    t = build_site_terrain(flat_moon, 10.0, 20.0, 5_000, points_across=25, far_azimuth_step_deg=5,
+                           max_range_m=20_000, with_far_mesh=False, with_panorama=True)
+    normal = t.panorama_normal.astype(float)
+    assert t.panorama_normal.dtype == np.float16
+    assert normal.shape == (*t.panorama_shade.shape, 2)
+    # Bare sphere: each normal leans away from the eye along its own bearing, never across it.
+    a = np.radians(t.far_azimuth_deg)[None, :]
+    across = normal[..., 0] * np.cos(a) - normal[..., 1] * np.sin(a)
+    along = normal[..., 0] * np.sin(a) + normal[..., 1] * np.cos(a)
+    assert np.abs(across).max() < 2e-4
+    # ... by at most theta = d/R for the visible ground (within 20 km here; float16 rounding 5e-4).
+    assert along.min() > -5e-4 and along.max() < 20_000 / R + 5e-4

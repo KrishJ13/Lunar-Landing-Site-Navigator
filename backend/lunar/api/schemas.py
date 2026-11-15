@@ -262,7 +262,38 @@ class SiteTerrainRequest(BaseModel):
     max_range_km: float = Field(DEFAULT_MAX_RANGE_M / 1000, gt=1, le=500)
     include_far_mesh: bool = Field(True, description="Include renderable terrain beyond the landing-site disc")
     include_panorama: bool = Field(False, description="Render visible terrain from the observer's eye")
-    elevation_product: Literal["ldem_128", "lola_chain"] | None = Field(
-        None, description="Use one LOLA grid or the distance-based LOLA panorama chain")
+    elevation_product: Literal["ldem_128", "lola_chain", "best"] | None = Field(
+        None, description=("Use one LOLA grid, the distance-based LOLA panorama chain, or the best maps "
+                           "(polar stereographic near the poles, SLDEM2015 below 60 deg; lunar.lola_chain.best_maps)"))
     include_ray_skyline: bool = Field(
         False, description="Include the ray-cast terrain horizon around the observer")
+    despike: bool = Field(False, description="Spike-correct the site (and surround) grids (lunar.despike)")
+    surround_km: float = Field(0.0, ge=0, le=30, description="Also send a coarser grid this far beyond the site edge")
+    distance_log16: bool = Field(
+        False, description=("Also send each panorama pixel's ground distance as uint16 "
+                            "d = exp(q / 65535 * ln(LOG16_MAX_M)) m (relative step 2e-4; float16 overflows at 65.5 km)"))
+
+
+class IlluminationRequest(BaseModel):
+    """POST /api/site/illumination: horizon maps on a power grid over the site disc,
+    then the visible fraction of the Sun's disc at every point and time step.
+    The response is binary (see lunar.api.terrain_payload)."""
+
+    lat: float = Field(..., ge=-90, le=90, description="Site latitude, degrees (planetocentric)")
+    lon: float = Field(..., ge=-360, le=360, description="Site longitude, degrees EAST-positive; any range")
+    diameter_km: float = Field(10.0, ge=5, le=50, description="Landing-site diameter, km")
+    mast_height_m: float = Field(2.0, ge=0, le=50, description="Height of the evaluated point above the ground, metres")
+    eye_height_m: float = Field(1.8, ge=0, le=100, description="Eye height at the site centre for the Sun/Earth angles")
+    start_utc: str = Field(..., description="ISO 8601 with explicit UTC (Z or +00:00)")
+    hours: float = Field(709.0, gt=0, le=9600, description="Length of the sequence, hours (709 = one synodic month)")
+    step_minutes: float = Field(60.0, ge=15, le=360, description="Time step, minutes (15 at the finest)")
+
+
+class ShadowFieldRequest(BaseModel):
+    """POST /api/site/shadow-field: nested height grids around a site for GPU shadows
+    (lunar.shadow_field). Binary response (lunar.api.terrain_payload)."""
+
+    lat: float = Field(..., ge=-90, le=90, description="Site latitude, degrees (planetocentric)")
+    lon: float = Field(..., ge=-360, le=360, description="Site longitude, degrees EAST-positive")
+    elevation_product: Literal["ldem_128", "lola_chain", "best"] = Field(
+        "best", description="The same choice as the panorama (POST /api/site/terrain)")

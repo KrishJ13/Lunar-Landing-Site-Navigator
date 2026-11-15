@@ -54,13 +54,21 @@ export async function fetchSiteTerrain({ lat, lon, diameterKm, observerHeightM, 
     throw new Error('The terrain server did not return the shaded panorama. Restart the updated backend and try again.')
   }
 
+  if (arrays.panorama_distance_m?.length !== panorama.columns * panorama.rows) {
+    throw new Error('The terrain server did not return the pixel distances for shadows. Restart the updated backend and try again.')
+  }
+  if (arrays.panorama_normal?.length !== 2 * panorama.columns * panorama.rows) {
+    throw new Error('The terrain server did not return the surface normals for lighting. Restart the updated backend and try again.')
+  }
+
   return {
     header: { ...header, skyline },
     arrays: { ...arrays, ray_skyline_azimuth_deg: azimuths },
   }
 }
 
-const TYPED = { f4: Float32Array, u1: Uint8Array }
+// f2 (float16) stays as raw bits in a Uint16Array: WebGL2 uploads it as HALF_FLOAT.
+const TYPED = { f4: Float32Array, f2: Uint16Array, u1: Uint8Array }
 
 /** Split a terrain payload into its JSON header and typed-array views (no copies). */
 export function decodeTerrainPayload(buffer) {
@@ -76,6 +84,34 @@ export function decodeTerrainPayload(buffer) {
     const Typed = TYPED[b.dtype]
     if (!Typed) throw new Error(`Unexpected array type ${b.dtype} in terrain data.`)
     arrays[b.name] = new Typed(buffer, b.offset, b.byte_length / Typed.BYTES_PER_ELEMENT)
+  }
+  return { header, arrays }
+}
+
+/**
+ * Horizon maps on a power grid over the site disc and the visible fraction of
+ * the Sun at every point and time step (POST /api/site/illumination;
+ * backend/lunar/horizon_maps.py, backend/lunar/illumination.py). Binary payload
+ * as fetchSiteTerrain. arrays.lit is (T, ny, nx) uint8 on the shared lattice
+ * (backend/lunar/horizon_tiles.py), 255 = whole disc visible.
+ */
+export async function fetchIllumination({ lat, lon, diameterKm, mastHeightM, eyeHeightM, startUtc, hours, stepMinutes }, signal) {
+  const response = await fetch(`${API_BASE}/api/site/illumination`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lat, lon, diameter_km: diameterKm, mast_height_m: mastHeightM, eye_height_m: eyeHeightM,
+      start_utc: startUtc, hours, step_minutes: stepMinutes,
+    }),
+    signal,
+  })
+  if (!response.ok) throw new Error(await errorMessage(response))
+  const { header, arrays } = decodeTerrainPayload(await response.arrayBuffer())
+  const nodes = (header.grid?.nx ?? 0) * (header.grid?.ny ?? 0)
+  const count = header.times?.count
+  if (!(nodes > 0) || !(count > 0) || arrays.lit?.length !== count * nodes || arrays.mean_lit?.length !== nodes ||
+      header.grid.site_to_frame?.length !== 2) {
+    throw new Error('The backend returned an incomplete illumination result. Restart the updated backend and try again.')
   }
   return { header, arrays }
 }

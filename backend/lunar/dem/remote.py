@@ -212,9 +212,18 @@ class RemoteGrid:
         return out
 
     def window(self, row0: int, row1: int, col0: int, col1: int) -> np.ndarray:
-        """Dense copy of rows [row0, row1) x cols [col0, col1)."""
-        r, c = np.mgrid[row0:row1, col0:col1]
-        return self[r, c]
+        """Dense copy of rows [row0, row1) x cols [col0, col1), assembled block by
+        block (slice copies, no per-pixel indexing)."""
+        out = np.empty((row1 - row0, col1 - col0), dtype=self.dtype)
+        wanted = [(br, bc) for br in range(row0 // BLOCK, (row1 - 1) // BLOCK + 1)
+                  for bc in range(col0 // BLOCK, (col1 - 1) // BLOCK + 1)]
+        loaded = self.blocks(wanted)
+        for (br, bc), data in loaded.items():
+            r0, c0 = br * BLOCK, bc * BLOCK
+            rs, re = max(row0, r0), min(row1, r0 + data.shape[0])
+            cs, ce = max(col0, c0), min(col1, c0 + data.shape[1])
+            out[rs - row0:re - row0, cs - col0:ce - col0] = data[rs - r0:re - r0, cs - c0:ce - c0]
+        return out
 
     # ----- blocks -----
 

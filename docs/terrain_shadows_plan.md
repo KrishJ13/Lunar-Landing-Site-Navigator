@@ -157,26 +157,27 @@ Then for any time t:
 
 ---
 
-## 5. Wireframe view: a separate page, Lunar Skyline V2 (agreed 2026-11-15)
+## 5. The view: a separate page, Lunar Skyline V2 (agreed 2026-11-15, revised)
 
 - **Where.** A developer page, `frontend/skyline-v2.html` (code in
   `frontend/src/skyline-v2/`), linked from the home menu. It handles one site at a time
   and is written as self-contained components, so it can later move into Moon Explorer.
   The original Lunar Skyline page is left unchanged.
-- **Inputs.** Lat/lon (or a preset), eye height, landing-site diameter (5–50 km) and a
-  **single** UTC date and time. The terrain mesh does not depend on the time; the time
-  sets the Sun and Earth positions and the shadows.
-- **Views.** First-person 360° (horizon, Sun/Earth) **and** an overhead view orbiting
-  the site disc (shadows and, later, the heatmap).
-- **Style.** Wireframe **grid squares** with no triangle diagonals, drawn by the shader
-  where a grid coordinate is close to a whole number. Lines are anti-aliased via the
-  shader's screen-space derivative, with adjustable thickness. Faces are opaque black,
-  so hidden lines are removed. Lines are grey by distance, darker = nearer.
-- **First-person projection.** Today's true-proportion cylindrical projection,
-  az = atan2(E, N) and el = atan2(U, √(E² + N²)), so the terrain, skyline and Sun/Earth
-  dots share one mapping.
-- **Sun and Earth.** Unchanged: SPICE at ground + eye height. The terrain only decides
-  whether they are blocked.
+- **Inputs.** Lat/lon (or a preset), eye height, landing-site diameter (5–50 km), a
+  **single** UTC date and time, and the elevation data (LOLA resolution chain or
+  `ldem_128` only). The terrain does not depend on the time; the time sets the Sun and
+  Earth and the lighting.
+- **The wireframe was dropped** (2026-11-15, commit `bd26fc7`). The first-person view is
+  now a backend-rendered panorama: for every bearing (0.25° apart) and 1,024 elevation
+  rows the backend finds the first ground the ray meets (`lunar/panorama.py`), and the
+  browser draws it under the ray-cast skyline. The overhead view is the shaded site disc.
+- **Elevation chain** (`lunar/lola_chain.py`): `ldem_512` near the site, blending to
+  `ldem_256` over 2–4 km and to `ldem_128` over 12–20 km; `ldem_875{s,n}_5m` within
+  320–640 m when |lat| ≥ 87.5°; a 5 m / ~59 m foreground patch within 320 m
+  (`lunar/foreground.py`). *Open:* this is LOLA-only, while §8 chose SLDEM2015 for the
+  site below 60°.
+- **First-person projection.** True-proportion cylindrical: az = atan2(E, N),
+  el = atan2(U, √(E² + N²)), shared by the terrain, skyline and Sun/Earth.
 
 ---
 
@@ -289,11 +290,151 @@ Panel models and constants are to be agreed with the team:
        - skyline beyond the site (127 azimuths): |Δ| median 0.0020°, max 0.031°;
        - a first version skipped the ground at the feet. That ground is the skyline in
          309 of 720 directions on this ridge, so the radial near mesh was added.
-   - **Stage 2.** Sun and Earth dots on the skyline at the chosen instant. Check: against
-     JPL Horizons.
-   - **Stage 3.** The shadow map: per-point horizon maps (§4) and the lit fraction on the
-     mesh. Checks: the eye point against `skyline.py`, and against direct ray casts.
+   - *Superseded:* Stage 1's grid wireframe was replaced by the shaded panorama (§5).
+   - **Sun and Earth — built (2026-11-15).** Circles at true angular size on the
+     first-person view, from `GET /api/v1/positions` with elevation_m = ground + eye
+     (SPICE, `LT+S`, `MOON_ME_DE440_ME421`), hidden where V2's ray-cast skyline is above
+     them (64-column disc integral). Code: `bodies.js`, `BodyTable.jsx`.
+     - **vs JPL Horizons** (connecting ridge, eye 1,957.18 m, 2026-11-15 12:00 UTC,
+       airless apparent): Sun az/el differ by 6×10⁻⁹° / 1×10⁻⁹°, Earth by 4×10⁻⁷° /
+       4×10⁻⁸°, Earth range 403,953.14 vs 403,953.15 km.
+     - **Sizes:** 2·asin(R/d). Sun (R = 695,700 km) equals Horizons to 0.000″. Earth uses
+       the mean radius 6,371 km: 1.8074° vs Horizons' equatorial 1.8094° (0.11 %).
+       Measured on screen at 5° FOV: Sun 0.5384° (true 0.5385°), Earth 1.9332° (true
+       1.9336°). No minimum drawn size.
+   - **Lighting from the real Sun, no shadows — built (2026-11-15).**
+     - **Backend:** `panorama_normal`, float16 (rows, columns, 2) = east, north of the unit
+       surface normal of the visible ground in each pixel, in the **site** ENU frame
+       (curvature included: bare ground at d has normal tilted by d/R, 9.89° at 300 km).
+       `_normals` crosses the across-bearing chord with the radial derivative over one
+       cell; within 320 m the foreground patch's slopes are rotated into the site frame
+       (Rodrigues, θ = d/R). About 5.9 MB extra.
+     - **Shader** (`lighting.js`, shared by both views): Moon Explorer's model,
+       scattering = mix(2μ₀/(μ₀+μ), μ₀, 0.19), direct = albedo·2.3·scattering·(Sun not
+       behind Earth), uniform grey albedo 0.5 (sRGB). μ₀ is averaged over the Sun's disc
+       (16 strips), so a facet the Sun is setting behind gets the part still above it.
+       A fill from the viewer at 9 % of albedo is **not physical** (labelled on the page).
+     - **Checks.** Tests: bare-sphere normals equal the local vertical to < 1×10⁻⁴°;
+       a tilted plane to 1×10⁻⁹; foreground rotation exact. Real `ldem_128` (connecting
+       ridge, Apollo 17, 400 points each): normals equal an independent geodesic + exact
+       ENU calculation over the same span to 1.5×10⁻⁶°. Over a fixed one-cell span the
+       median difference is 0.13° (Apollo 17) / 0.92° (ridge): across the line of sight
+       the normal is averaged over the 0.25° bearing step (262 m at 60 km). GPU output
+       vs an independent CPU evaluation: ≤ 0.66/255 over ~60,000 ground pixels, four views.
+     - **Known gap until Stage 3:** ground facing the Sun is lit even if terrain stands
+       between it and the Sun.
+   - **Stage 3: horizon maps and sunlight over time — built (2026-11-15).** Chosen over
+     per-instant ray-traced shadows (tried and dropped the same day): the goal is power over
+     days and months, so, as the LOLA illumination studies (Mazarico et al. 2011) and solar
+     GIS tools (GRASS `r.horizon`/`r.sun`, PVGIS) do, horizons are computed once and every
+     time step is a lookup.
+     - **Horizon maps** (`lunar/horizon_maps.py`): a 65 × 65 power grid over the site disc
+       (156 m apart for 10 km), 1° directions, point 2 m above the ground (adjustable).
+       Exact sphere geometry in each point's own frame; directions stored as site-grid
+       azimuths with meridian convergence γ (±23° across a 10 km site at the connecting ridge).
+       *Near* (≤ max(5 km, 8g) + g√2): a ~52 m height grid sampled by strided slices, one
+       bilinear offset per (direction, distance) for all points. *Far* (to 300 km, 0.5 %
+       steps): exact geodesic rays from a sub-grid (g = D/10, 12 × 12), interpolated with a
+       height correction.
+     - **Maps:** best by spacing (§2): polar 20–40 m maps at the poles, SLDEM2015 below 60°,
+       240 m maps for far rays. Not the panorama's LOLA chain: its cylindrical `ldem_512`
+       carries isolated spikes near the pole (+130 m in one sample at the connecting ridge),
+       which cast false horizons up to 15°.
+     - **Illumination** (`lunar/illumination.py`, `POST /api/site/illumination`): SPICE Sun
+       per step (LT+S at the site), exact parallax per point, visible fraction of the disc
+       by 16 vertical chords against the horizon (as `bodyVisibility`). Outputs lit
+       fraction (T × n × n), % of time sunlit and longest darkness per point.
+     - **Checks.** Map vs independent direct rays (25 points × 360 directions): connecting
+       ridge median 0.019°, p99 0.87°; Apollo 17 median 0.023°, p99 0.39°. Tests: bare
+       sphere horizon = dip −acos(R/(R+h)) to 0.001°; ridge vs direct rays; disc fraction =
+       circular segment to 0.003; bare-sphere series.
+     - **Speed:** maps 5.8 s (ridge) / 11.4 s (Apollo 17), cached; then one synodic month
+       hourly in 0.9 s, a year at 6 h in 2.4 s.
+     - **Sanity:** connecting ridge, 2 m, Dec 2026–Nov 2027 at 6 h: centre sunlit 82.6 %,
+       best point 88.9 %, the range published for this ridge. Apollo 17: ~47 %.
+     - **Page:** "Sunlight over time" panel; the overhead view shows shadows at any step
+       (slider, play), % of time sunlit, or longest darkness; chart of the share of the
+       site sunlit. The first-person panorama has no terrain shadows yet.
+     - **To do:** a published-value comparison at named points; Earth visibility from the
+       same maps; panorama shadows inside the site from the same maps.
+   - **Load-time optimisation — built (2026-11-15).** Measured first: for a site a few km
+     from the last, the page waited ~3 s (panorama) then ~6 s (horizon maps) in sequence.
+     - **Horizon maps on a shared lattice** (`lunar/horizon_tiles.py`): points on a fixed
+       grid per ~100 km frame (spacing 50·√2^k m nearest D/64), computed in 16 × 16 tiles,
+       kept in memory and on disk (`data/dem/cache/horizons/`), and precomputed in the
+       background within 3 tiles of each visited site (live requests take priority). A
+       nearby site reuses its tiles; only tiles touching the disc are requested. Each
+       node's value equals a directly computed block to 1e-4°; the site-to-lattice map is
+       accurate to 4–6 cm.
+     - **Faster per-node computation**, same results: compare tan(elevation) instead of
+       atan2, float32 strided slices (near rays 2.6 → 0.8 s); far rays read one in-memory
+       window of the map's own pixels (wrapping at longitude 0/360) instead of per-sample
+       remote-grid lookups (Apollo 17: 12.2 → 4.2 s); exact per-corner height correction.
+       Direct-ray validation unchanged: ridge median 0.018°, Apollo 17 0.023°.
+     - **Frontend:** the terrain and sunlight requests run in parallel.
+     - **Measured end to end** (10 km site, 3 days at 15 min): a site already covered
+       ~1 s (was ~9 s); a new area with map data on disk ~5–6 s; moving 2–4 km before the
+       background fill ~3–4 s. A region never visited still pays the first download of
+       map blocks from PDS (tens of seconds, network-bound, then cached).
+     - **Open:** near the poles the panorama's LOLA chain reads the cylindrical `ldem_512`/
+       `ldem_256` grids, where a small circle crosses every longitude: one panorama touches
+       thousands of 256-px blocks (slow) and these grids carry spikes there. The polar
+       stereographic maps would be faster and cleaner; a data decision, not yet made.
+   - **Lunar Skyline V3 — started (2026-11-15).** A separate page (`frontend/skyline-v3.html`,
+     `src/skyline-v3/`, menu card) carrying over V2 and adding:
+     - **Best maps** (`elevation_product: "best"`, `lunar.lola_chain.best_maps`): polar
+       stereographic LOLA maps near the poles (|lat| ≥ 80: 20 → 120 → 240 m; 60–80: 60 → 120 →
+       240 m; 5 m at the feet beyond 87.5°), SLDEM2015 → `ldem_256` → `ldem_128` below 60°.
+       Polar panoramas ~25 % faster; skyline median within 0.02° of the LOLA chain.
+     - **GPU terrain shadows for every visible point** (`lunar/shadow_field.py`,
+       `POST /api/site/shadow-field`, `src/skyline-v3/shadowField.js`): four nested 1024²
+       height grids from the panorama's own surface (±6 km at 11.7 m, ±30 km at 59 m,
+       ±150 km at 293 m, ±600 km at 1.17 km; uint16, ~0.2 m steps); per ground point a
+       straight 3-D ray to the Sun with the Moon's curvature, minimum clearance angle →
+       visible part of the Sun's disc. Baked once per time step (24 ms for the whole
+       panorama), so shadows cover the whole view and follow the timeline.
+       Checks: Python reference vs horizon maps 100 % (Shackleton floor) / 99.1 %
+       (connecting ridge) lit/unlit agreement; GPU vs Python on 400 panorama cells 100 %,
+       max difference 0.008; tests for quantisation, bare sphere and a 500 m wall's
+       5.7 km shadow. The Shackleton floor and its walls now stay dark with the Sun
+       behind the rim.
+     - **Exact pixel distances:** `panorama_distance_log16` (relative error 1e-4); the
+       float16 array overflows beyond 65.5 km (harmless for V2, which uses it inside
+       the site only).
+     - **Overhead Sun/Earth markers:** true azimuth and elevation, schematic distance
+       (0.8 D), labelled with the real distance.
+     - **GPU-drawn foreground — built (2026-11-15).** A fifth, finest shadow-field level
+       (±768 m at 1.5 m). Per pixel the shader marches the view ray from the eye over it
+       (exact sphere geometry), shades the hit with the backend's own fixed-light formula
+       (slopes over one source-map cell) plus sunlight and that point's shadow (baked per
+       step on the same grid), and cross-fades to the panorama between 75 % and 95 % of the
+       grid's reach. Seamless: mean brightness within 0.1–1 grey level of the panorama at
+       three sites, four headings. **Finding:** it adds little visible detail, because the
+       data has none to add: within a few metres of the feet one 5 m polar cell (59 m below
+       60°) fills the view (1–6 grey levels at 0.7–3 m), and the 5 m map is smooth there
+       (7.4 m relief within 50 m at the connecting ridge). Sharper ground needs finer data:
+       LROC NAC DTMs (~2 m, at selected sites) or NAC photo texture (baked lighting).
+   - **V3: spike correction, surround, time-varying maps — built (2026-11-15).**
+     - **Spike correction** (`lunar/despike.py`): a node is an artefact when it stands above
+       (below) every sample of a ring 1.5 source cells away and above (below) the radial
+       profile continued inward (2 m1 − m2), both by more than max(8 m, 0.3 cell, 4 MAD);
+       it is replaced by that continuation clipped to the ring's range. Ridges, rims and
+       summits are kept (tests). Applied to the V3 site and surround grids, the shadow-field
+       levels that resolve their source map, the horizon-map near grid and the far map's
+       native-pixel window (horizon tile cache v2). On real data: cylindrical `ldem_512` at
+       the connecting ridge 12 of 165,649 nodes (up to 614 m); polar 20 m map 24 of 1.4 M
+       (≤ 42 m); 5 m map 2 (≤ 19 m). The panorama's rays keep their own peak correction.
+     - **Overhead surround:** a 10 km ring beyond the site (`surround_km`, ~125 m grid),
+       greyed, with the same GPU shadows (shadow grid 1024² over site + surround).
+     - **Time-varying maps** replace "% of time sunlit" and "longest darkness": incident
+       sunlight E = S·(Sun seen)·cos i on the local surface, S = 1361 W/m² × (1 AU / r)²
+       (IAU 2015 B3), drawn per pixel from the same GPU shadows, square-root colour scale;
+       and "dark for" (time each lattice point has been continuously dark up to the step).
+     - **One shadow height:** the visible shadows use the form's point height, the same as
+       the sunlight figures (horizon maps).
    - **Stage 4.** The power heatmap (§6), after the metric is agreed.
+   - **Extensions noted:** Explorer's albedo map instead of uniform grey; physical
+     earthshine instead of the fill; a "life-size" field of view.
 4. **Move into Moon Explorer** once V2 is validated.
 
 ## 8. Decisions

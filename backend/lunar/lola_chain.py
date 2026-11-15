@@ -1,4 +1,14 @@
-"""Distance bands for the LOLA-only terrain surface used by Skyline V2."""
+"""Distance bands for the terrain surface of the Skyline V2/V3 panoramas.
+
+Three maps, near to far, blended over GLOBAL_BLENDS (plus the 5 m polar map at
+the feet beyond 87.5 deg):
+  * "lola_chain" (V2): the cylindrical LOLA grids ldem_512 -> ldem_256 -> ldem_128.
+  * "best" (V3, best_maps): the highest-quality map for each place. Near the
+    poles the cylindrical grids are a poor fit: a small circle crosses every
+    longitude (thousands of 256-px blocks per panorama) and they carry isolated
+    spikes there; the polar stereographic LOLA maps are made for these regions.
+    Below 60 deg, SLDEM2015 (LOLA + SELENE stereo, no track artefacts) near the site.
+"""
 
 import numpy as np
 
@@ -15,15 +25,25 @@ def transition(distance, interval):
     return t * t * (3 - 2 * t)
 
 
+def best_maps(lat):
+    """Near, mid and far maps for a site at latitude `lat` (see the module docstring)."""
+    pole = "s" if lat < 0 else "n"
+    if abs(lat) >= 80.0:
+        return (f"ldem_80{pole}_20m", f"ldem_75{pole}_120m", f"ldem_60{pole}_240m")
+    if abs(lat) >= 60.0:
+        return (f"ldem_60{pole}_60m", f"ldem_60{pole}_120m", f"ldem_60{pole}_240m")
+    return ("sldem2015_512", "ldem_256", "ldem_128")
+
+
 class LolaChain:
-    def __init__(self, products, lat, lon):
+    def __init__(self, products, lat, lon, maps=GLOBAL_MAPS):
         by_name = {}
         for product in sorted(products, key=lambda p: bool(getattr(p, "is_remote", False))):
             by_name.setdefault(product.name, product)
-        missing = [name for name in GLOBAL_MAPS if name not in by_name]
+        missing = [name for name in maps if name not in by_name]
         if missing:
-            raise LookupError(f"LOLA resolution chain unavailable: missing {', '.join(missing)}")
-        self.global_maps = [by_name[name] for name in GLOBAL_MAPS]
+            raise LookupError(f"Elevation maps unavailable: missing {', '.join(missing)}")
+        self.global_maps = [by_name[name] for name in maps]
         pole = "s" if lat < 0 else "n"
         polar = by_name.get(f"ldem_875{pole}_5m") if abs(lat) >= 87.5 else None
         self.polar = polar if polar is not None and bool(polar.contains(lat, lon)) else None
