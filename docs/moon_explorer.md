@@ -38,7 +38,8 @@ Displayed decimals are coordinate precision. Position accuracy also depends on t
 mosaic's registration and the spherical surface used for picking. Search accepts
 signed decimal latitude and longitude in that order, separated by a comma or a space.
 The clickable-area overlay uses the same geographic mask as pointer selection and search.
-Every selected site has a 10 km geodesic diameter. The scale bar measures distance
+The selected site has an adjustable geodesic diameter from 5 to 50 km, with a
+10 km default. The scale bar measures distance
 at the centre of the globe view, where zoom is capped at 10 km per 96 CSS pixels.
 
 The shader uses real terrain for local surface slopes and samples terrain along the

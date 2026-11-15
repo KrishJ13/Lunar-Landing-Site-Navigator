@@ -29,6 +29,35 @@
         "--strictPort"
       ],
       "port": 5173
+    },
+    {
+      "name": "backend-macos",
+      "runtimeExecutable": "backend/.venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "lunar_skyline.app:app",
+        "--app-dir",
+        "backend",
+        "--port",
+        "8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "frontend-alt",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5175",
+        "--strictPort"
+      ],
+      "port": 5175
     }
   ]
 }

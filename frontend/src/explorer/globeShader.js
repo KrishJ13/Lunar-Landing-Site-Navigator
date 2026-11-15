@@ -1,4 +1,4 @@
-import { MOON_RADIUS_KM, POLAR_LIMIT, SELECTION_DIAMETER_KM, discRadius } from './geometry.js'
+import { MOON_RADIUS_KM, POLAR_LIMIT, discRadius } from './geometry.js'
 import { EQ, NORTH, NORTH_NAC, SOUTH_NAC, NAC_POLAR_MIN, POLAR_ORIGIN_M, TABLE_SIDE, WAC_POLAR_MIN, createTrekMaps } from './trekMaps.js'
 
 export const MAP_DIRECTORY = `${import.meta.env.BASE_URL}moon/`
@@ -25,6 +25,7 @@ uniform vec3 shadowEarth;
 uniform vec3 earth;
 uniform bool showCoverage;
 uniform vec3 selectedPoint;
+uniform float selectionDiameterKm;
 uniform sampler2D albedo;
 uniform highp sampler2DArray trekAtlas;
 uniform highp isampler2D trekIndex;
@@ -211,7 +212,7 @@ void main() {
   }
   if (dot(selectedPoint, selectedPoint) > 0.5) {
     // Chord distance is stable for a small geodesic circle on the unit sphere.
-    float radius = 2.0 * sin(${SELECTION_DIAMETER_KM}.0 / (4.0 * RADIUS));
+    float radius = 2.0 * sin(selectionDiameterKm / (4.0 * RADIUS));
     float ring = 1.0 - smoothstep(0.45, 1.3, abs(selectionDistance - radius) / selectionEdge);
     image = mix(image, vec3(1.0, 0.84, 0.42), ring);
   }
@@ -323,7 +324,7 @@ export async function loadGlobe(canvas, signal, requestRedraw) {
     gl.uniform1i(uniform('trekAtlas'), 4)
     gl.uniform1i(uniform('trekIndex'), 5)
     const uniforms = Object.fromEntries(
-      ['resolution', 'disc', 'distanceToCamera', 'camera', 'sun', 'shadowEarth', 'trekLevels', 'earth', 'showCoverage', 'selectedPoint'].map((name) => [name, uniform(name)]),
+      ['resolution', 'disc', 'distanceToCamera', 'camera', 'sun', 'shadowEarth', 'trekLevels', 'earth', 'showCoverage', 'selectedPoint', 'selectionDiameterKm'].map((name) => [name, uniform(name)]),
     )
 
     let detailRequest
@@ -333,7 +334,7 @@ export async function loadGlobe(canvas, signal, requestRedraw) {
         detailRequest ??= upload('moon-8k', 0, true)
         return detailRequest
       },
-      draw(geometry, ephemeris, zoom, showCoverage, selectedPoint) {
+      draw(geometry, ephemeris, zoom, showCoverage, selectedPoint, diameterKm) {
         const scale = Math.min(window.devicePixelRatio || 1, 1.5)
         const width = Math.max(1, Math.round(canvas.clientWidth * scale))
         const height = Math.max(1, Math.round(canvas.clientHeight * scale))
@@ -353,6 +354,7 @@ export async function loadGlobe(canvas, signal, requestRedraw) {
         gl.uniform3fv(uniforms.earth, geometry.earth)
         gl.uniform1i(uniforms.showCoverage, showCoverage)
         gl.uniform3fv(uniforms.selectedPoint, selectedPoint ?? [0, 0, 0])
+        gl.uniform1f(uniforms.selectionDiameterKm, diameterKm)
         gl.drawArrays(gl.TRIANGLES, 0, 3)
       },
       cleanup,

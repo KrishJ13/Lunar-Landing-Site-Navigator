@@ -7,6 +7,8 @@ import { loadGlobe } from './globeShader.js'
 import './explorer.css'
 
 const INITIAL_VIEW = { zoom: 1 }
+const MIN_DIAMETER_KM = 5
+const MAX_DIAMETER_KM = 50
 const TIMES = Array.from({ length: 96 }, (_, index) =>
   `${String(Math.floor(index / 4)).padStart(2, '0')}:${String(index % 4 * 15).padStart(2, '0')}`,
 )
@@ -52,6 +54,7 @@ function MoonExplorer() {
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [hover, setHover] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [diameterKm, setDiameterKm] = useState(SELECTION_DIAMETER_KM)
   const [dragging, setDragging] = useState(false)
   const [showCoverage, setShowCoverage] = useState(false)
   const [query, setQuery] = useState('')
@@ -68,7 +71,7 @@ function MoonExplorer() {
   const hasSize = size.width > 0 && size.height > 0
   const maxZoom = camera && hasSize ? zoomLimit(size.width, size.height, camera) : 1
   const zoom = Math.min(maxZoom, orbit.zoom)
-  const ready = Boolean(camera && renderer && !error)
+  const ready = Boolean(camera && renderer && hasSize && !error)
   const scale = camera && hasSize && scaleBar(size.width, size.height, zoom, camera)
   const activeSelection = camera && selected && isMapped(selected, camera.earth) ? selected : null
   const pin = ready && activeSelection && projectSurface(activeSelection, size.width, size.height, zoom, camera)
@@ -118,7 +121,7 @@ function MoonExplorer() {
       if (frame !== null) return
       frame = requestAnimationFrame(() => {
         frame = null
-        renderer.draw(camera, ephemeris, zoom, showCoverage, activeSelection)
+        renderer.draw(camera, ephemeris, zoom, showCoverage, activeSelection, diameterKm)
       })
     }
     redraw.current()
@@ -126,7 +129,7 @@ function MoonExplorer() {
       if (frame !== null) cancelAnimationFrame(frame)
       redraw.current = null
     }
-  }, [ready, renderer, camera, ephemeris, zoom, size, showCoverage, activeSelection])
+  }, [ready, renderer, camera, ephemeris, zoom, size, showCoverage, activeSelection, diameterKm])
 
   function rotate(deltaLongitude, deltaLatitude) {
     setOrbit((previous) => {
@@ -326,12 +329,20 @@ function MoonExplorer() {
               </div>
               {searchError && <p id="moon-search-error" role="alert">{searchError}</p>}
             </form>
-            {selected && (
-              <div className="moon-selection" aria-label="Selected lunar coordinates">
-                <span>{coordinateText(selected)}<small>{SELECTION_DIAMETER_KM} km diameter</small></span>
-                <button type="button" aria-label="Clear selected point" onClick={() => setSelected(null)}>×</button>
+            <div className="moon-selection" role="group" aria-label="Landing site">
+              <div className="moon-selection-heading">
+                <span>{selected ? coordinateText(selected) : 'Select a landing site'}</span>
+                {selected && (
+                  <button type="button" aria-label="Clear selected point" onClick={() => setSelected(null)}>×</button>
+                )}
               </div>
-            )}
+              <label className="moon-selection-diameter">
+                <span>Diameter <strong>{diameterKm} km</strong></span>
+                <input type="range" min={MIN_DIAMETER_KM} max={MAX_DIAMETER_KM} step={1}
+                  value={diameterKm} onChange={(event) => setDiameterKm(event.currentTarget.valueAsNumber)}
+                  aria-label="Landing site diameter" aria-valuetext={`${diameterKm} km`} />
+              </label>
+            </div>
           </div>
           <div className="moon-stage-actions">
             <label className="moon-coverage-toggle">
