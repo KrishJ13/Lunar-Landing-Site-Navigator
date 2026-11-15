@@ -1,7 +1,8 @@
+import { memo } from 'react'
 import { formatDistance } from '../lib/view.js'
 
 /** "How far can I see?" facts for one view. */
-export default function HorizonFacts({ data }) {
+function HorizonFacts({ data }) {
   const { smooth_horizon: smooth, skyline } = data
   const el = skyline.elevation_deg
   const above = el.filter((v) => v > 0).length / el.length
@@ -29,3 +30,5 @@ export default function HorizonFacts({ data }) {
     </section>
   )
 }
+
+export default memo(HorizonFacts)

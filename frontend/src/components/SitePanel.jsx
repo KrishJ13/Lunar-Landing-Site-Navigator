@@ -1,8 +1,9 @@
 import { compassName, formatDistance, formatHeight } from '../lib/view.js'
+import { memo } from 'react'
 import HeightGauge from './HeightGauge.jsx'
 
 /** "Where you are standing": basic facts about the ground under your feet. */
-export default function SitePanel({ data }) {
+function SitePanel({ data }) {
   const { site, site_info: info, skyline } = data
   const [near, wide] = info.surroundings
   const belowAbove = info.ground_m < 0 ? 'below' : 'above'
@@ -66,3 +67,5 @@ function formatPercent(fraction) {
 function capitalise(text) {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
+
+export default memo(SitePanel)

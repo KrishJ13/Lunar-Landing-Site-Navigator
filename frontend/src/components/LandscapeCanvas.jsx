@@ -7,13 +7,15 @@ import {
   elevationStep,
   formatDistance,
   formatHeight,
-  isHidden,
+  angleDiff,
   makeViewScale,
   segmentAt,
+  skylineAt,
 } from '../lib/view.js'
+import { STATUS, bodyStatus } from '../lib/celestial.js'
 
 const GRID = 'rgba(255,255,255,0.07)'
-const EYE_LEVEL = 'rgba(255, 212, 59, 0.8)'
+const EYE_LEVEL = 'rgba(186, 200, 222, 0.8)' // neutral: amber is reserved for the Sun
 
 // One line style for every line (ridge crests, skyline, distance contours):
 // the same width, solid, over the same thin dark casing. Only its grey shade
@@ -50,12 +52,12 @@ const HEIGHT = 6
  * Distance shade: lib/colormap.js (greys: darker = nearer, lighter = farther).
  *
  * Props: data (ViewResponse), heading, pitch, fov, height (px), optional
- * `bodies` ({sun, earth} SPICE samples) drawn on a separate overlay canvas so
+ * `bodies` ({sun, earth} SPICE samples) and their terrain `statuses` drawn on a separate overlay canvas so
  * playback never redraws the terrain, plus optional pointer handlers for dragging.
  * Sun/Earth use the same axes as the terrain: azimuth clockwise from north,
  * elevation above the local horizontal plane.
  */
-export default function LandscapeCanvas({ data, heading, pitch, fov, height, className, bodies, ...handlers }) {
+export default function LandscapeCanvas({ data, heading, pitch, fov, height, className, bodies, statuses, ...handlers }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const markersRef = useRef(null)
@@ -94,8 +96,8 @@ export default function LandscapeCanvas({ data, heading, pitch, fov, height, cla
       canvas.width = Math.round(width * dpr)
       canvas.height = Math.round(height * dpr)
     }
-    drawBodies(canvas.getContext('2d'), scale, bodies, skyline, dpr)
-  }, [scale, bodies, skyline, width, height])
+    drawBodies(canvas.getContext('2d'), scale, bodies, statuses, skyline, dpr)
+  }, [scale, bodies, statuses, skyline, width, height])
 
   function onPointerMove(event) {
     handlers.onPointerMove?.(event)
@@ -143,8 +145,12 @@ export default function LandscapeCanvas({ data, heading, pitch, fov, height, cla
 const BODY_STYLE = { sun: ['Sun', '#f5b301'], earth: ['Earth', '#3b82f6'] }
 const MIN_MARKER_RADIUS_PX = 5
 
-/** Sun/Earth discs at their true angular size (minimum 5 px so they stay visible). */
-function drawBodies(ctx, scale, bodies, skyline, dpr) {
+/**
+ * Sun/Earth discs at their true angular size (minimum 5 px so they stay visible).
+ * Visible: solid. Partly behind terrain: a faint dashed ghost of the whole disc with the
+ * part above the skyline drawn solid. Behind terrain / below horizon / unknown: ghost only.
+ */
+function drawBodies(ctx, scale, bodies, statuses, skyline, dpr) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, scale.width, scale.height)
   if (!bodies) return
@@ -153,30 +159,66 @@ function drawBodies(ctx, scale, bodies, skyline, dpr) {
   for (const [key, [label, colour]] of Object.entries(BODY_STYLE)) {
     const b = bodies[key]
     if (!b) continue
-    const x = scale.x(b.azimuth_deg)
-    if (x === null) continue
-    const y = scale.y(b.elevation_deg)
     const r = Math.max(b.angular_radius_deg * scale.pxPerDegY, MIN_MARKER_RADIUS_PX)
+    const d = angleDiff(b.azimuth_deg, scale.heading)
+    // Keep a disc whose centre is just outside the view but whose edge is inside.
+    if (Math.abs(d) > scale.fov / 2 + r / scale.pxPerDegX) continue
+    const x = scale.width / 2 + d * scale.pxPerDegX
+    const y = scale.y(b.elevation_deg)
     if (y < -r || y > scale.height + r) continue
-    const hidden = isHidden(b, skyline)
-    ctx.globalAlpha = hidden ? 0.45 : 1
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, 2 * Math.PI)
-    ctx.fillStyle = colour
-    ctx.fill()
-    ctx.lineWidth = 1.5
-    ctx.strokeStyle = 'rgba(0,0,0,0.7)'
-    if (hidden) ctx.setLineDash([3, 2])
-    ctx.stroke()
-    ctx.setLineDash([])
-    ctx.globalAlpha = 1
-    const note = b.elevation_deg < 0 ? ' (below horizon)' : hidden ? ' (behind terrain)' : ''
+    const status = statuses?.[key] ?? bodyStatus(b, skyline)
+
+    const disc = () => {
+      ctx.beginPath()
+      ctx.arc(x, y, r, 0, 2 * Math.PI)
+    }
+    if (status !== 'visible') {
+      ctx.globalAlpha = 0.35
+      disc()
+      ctx.fillStyle = colour
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.setLineDash([3, 2])
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = colour
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+    if (status === 'visible' || status === 'partial') {
+      ctx.save()
+      if (status === 'partial') clipAboveSkyline(ctx, scale, skyline, x - r - 1, x + r + 1)
+      disc()
+      ctx.fillStyle = colour
+      ctx.fill()
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)'
+      ctx.stroke()
+      ctx.restore()
+    }
+    const text = label + STATUS[status].short
     ctx.lineWidth = 3
     ctx.strokeStyle = 'rgba(0,0,0,0.75)'
     ctx.fillStyle = '#fff'
-    ctx.strokeText(label + note, x, y - r - 6)
-    ctx.fillText(label + note, x, y - r - 6)
+    // Keep the label inside the canvas when the disc is near an edge.
+    const half = ctx.measureText(text).width / 2 + 4
+    const lx = Math.min(Math.max(x, half), scale.width - half)
+    ctx.strokeText(text, lx, y - r - 6)
+    ctx.fillText(text, lx, y - r - 6)
   }
+}
+
+/** Restrict drawing to the sky above the terrain skyline between two screen x positions. */
+function clipAboveSkyline(ctx, scale, skyline, x0, x1) {
+  const path = new Path2D()
+  const top = -20
+  path.moveTo(x0, top)
+  for (let px = Math.floor(x0); px <= Math.ceil(x1); px++) {
+    const el = skylineAt(skyline, scale.azAt(px))
+    path.lineTo(px, el === null ? top : scale.y(el))
+  }
+  path.lineTo(x1, top)
+  path.closePath()
+  ctx.clip(path)
 }
 
 function draw(ctx, scale, landscape, dpr) {

@@ -92,9 +92,51 @@ export function elevationStep(degreesVisible) {
   return steps.find((s) => degreesVisible / s <= 10) ?? 30
 }
 
-/** True if the body centre is above the horizon plane but below the terrain skyline in its direction. */
-export function isHidden(b, skyline) {
-  if (b.elevation_deg < 0) return false
-  const i = azimuthIndex(skyline.azimuth_deg, b.azimuth_deg)
-  return b.elevation_deg < skyline.elevation_deg[i]
+const finite = (v) => typeof v === 'number' && Number.isFinite(v)
+
+/**
+ * Skyline elevation at azimuth `az`, linearly interpolated between the two neighbouring
+ * samples (wrapping 359->0). Returns null if either neighbour is missing/non-finite.
+ */
+export function skylineAt(skyline, az) {
+  const azs = skyline?.azimuth_deg
+  const els = skyline?.elevation_deg
+  if (!azs?.length || azs.length !== els?.length) return null
+  const n = azs.length
+  const step = n > 1 ? azs[1] - azs[0] : 360
+  const f = wrap360(az) / step
+  const i0 = Math.floor(f) % n
+  const i1 = (i0 + 1) % n
+  const a = els[i0]
+  const b = els[i1]
+  if (!finite(a) || !finite(b)) return null
+  return a + (b - a) * (f - Math.floor(f))
+}
+
+/**
+ * Terrain-relative visibility of a body disc: 'visible' (whole disc above the skyline over
+ * its whole azimuth span), 'hidden' (whole disc below it), 'partial', or 'unknown' when the
+ * skyline is unavailable/invalid at the body's azimuth. Uses the LOLA skyline, not the 0 deg horizon.
+ */
+export function bodyVisibility(b, skyline) {
+  const r = b.angular_radius_deg
+  const half = r / Math.max(Math.cos((Math.min(Math.abs(b.elevation_deg), 89) * Math.PI) / 180), 0.05)
+  const n = skyline?.azimuth_deg?.length
+  if (!n) return 'unknown'
+  const step = n > 1 ? skyline.azimuth_deg[1] - skyline.azimuth_deg[0] : 360
+  const azs = [b.azimuth_deg - half, b.azimuth_deg, b.azimuth_deg + half]
+  const lo = Math.ceil((b.azimuth_deg - half) / step)
+  const hi = Math.floor((b.azimuth_deg + half) / step)
+  for (let k = lo; k <= hi; k++) azs.push(k * step) // sampled azimuths inside the disc span
+  let min = Infinity
+  let max = -Infinity
+  for (const a of azs) {
+    const e = skylineAt(skyline, a)
+    if (e === null) return 'unknown'
+    min = Math.min(min, e)
+    max = Math.max(max, e)
+  }
+  if (b.elevation_deg - r >= max) return 'visible'
+  if (b.elevation_deg + r <= min) return 'hidden'
+  return 'partial'
 }
