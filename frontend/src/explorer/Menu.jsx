@@ -22,6 +22,12 @@ function Menu() {
               <p>Stand on the lunar surface and compare the terrain and sky at two sites.</p>
             </div>
           </a>
+          <a className="moon-menu-card moon-menu-skyline" href="./skyline-v2.html">
+            <div className="moon-menu-card-text">
+              <h2>Lunar Skyline V2 <span aria-hidden="true">↗</span></h2>
+              <p>Developer preview of a landing site's terrain, elevation, and local horizon.</p>
+            </div>
+          </a>
         </nav>
       </div>
     </main>

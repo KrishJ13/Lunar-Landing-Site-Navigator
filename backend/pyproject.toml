@@ -32,4 +32,5 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "real_data: needs downloaded LOLA elevation files (run scripts/fetch_dem.py first)",
+    "network: reads LOLA data from the PDS server; runs only with LUNAR_NETWORK_TESTS=1",
 ]

@@ -83,15 +83,35 @@ def load_available(dem_dir: Path = DEM_DIR) -> list[DemProduct]:
     return products
 
 
-def best_product(products: list[DemProduct], lat: float, lon: float) -> DemProduct:
-    """Finest-resolution product that covers (lat, lon)."""
-    covering = [p for p in products if bool(np.all(p.contains(lat, lon)))]
-    if not covering:
-        raise LookupError(
-            f"no downloaded elevation map covers lat={lat}, lon={lon}; "
-            "run scripts/fetch_dem.py"
-        )
-    return min(covering, key=lambda p: p.pixel_size_m)
+def _preference(products, target_m=None):
+    """Products in the order to try them.
+
+    Without a target: finest first. With a target spacing (metres): first the
+    products no coarser than the target, coarsest of those first (the one
+    closest to the target), then the coarser ones, finest of those first.
+    Local files win ties with remote ones, which then cost no network traffic.
+    """
+    def key(p):
+        return (p.pixel_size_m, bool(getattr(p, "is_remote", False)))
+
+    ordered = sorted(products, key=key)
+    if target_m is None:
+        return ordered
+    fine = [p for p in ordered if p.pixel_size_m <= target_m]
+    fine.sort(key=lambda p: (-p.pixel_size_m, bool(getattr(p, "is_remote", False))))
+    return fine + [p for p in ordered if p.pixel_size_m > target_m]
+
+
+def best_product(products: list[DemProduct], lat: float, lon: float, target_m: float | None = None) -> DemProduct:
+    """Product to use at (lat, lon): the finest that covers it or, given a target
+    spacing in metres, the one closest to it from below (see _preference)."""
+    for p in _preference(products, target_m):
+        if bool(np.all(p.contains(lat, lon))):
+            return p
+    raise LookupError(
+        f"no available elevation map covers lat={lat}, lon={lon}; "
+        "run scripts/fetch_dem.py"
+    )
 
 
 def height_at(products: list[DemProduct], lat: float, lon: float) -> float:
@@ -99,18 +119,34 @@ def height_at(products: list[DemProduct], lat: float, lon: float) -> float:
     return best_product(products, lat, lon).height_m(lat, lon)
 
 
-def heights_at(products: list[DemProduct], lat, lon, method: str = "bilinear"):
-    """Vectorised height lookup over many points, each from its finest map.
+def heights_at(products: list[DemProduct], lat, lon, method: str = "bilinear", target_m=None):
+    """Vectorised height lookup over many points.
 
-    Maps are tried finest-first; each point takes its height from the first
-    map that covers it. Returns (heights_m, pixel_size_m) arrays, the second
-    recording which resolution each height came from. Points no map covers
-    are NaN in both. `method` is "bilinear" or "bicubic" (see DemProduct).
+    Without `target_m`, each point takes its height from the finest map that
+    covers it. With `target_m` (metres; a scalar or one value per point), each
+    point uses the coarsest map no coarser than its target, or failing that
+    the finest coarser one. This keeps far-away samples, which need only
+    coarse spacing, from pulling in fine remote data they cannot use.
+
+    Returns (heights_m, pixel_size_m) arrays, the second recording which
+    resolution each height came from. Points no map covers are NaN in both.
+    `method` is "bilinear" or "bicubic" (see DemProduct).
     """
     lat, lon = np.broadcast_arrays(np.atleast_1d(lat), np.atleast_1d(lon))
     heights = np.full(lat.shape, np.nan)
     pixel_size = np.full(lat.shape, np.nan)
-    for product in sorted(products, key=lambda p: p.pixel_size_m):
+    if target_m is not None:
+        target = np.broadcast_to(np.asarray(target_m, dtype=float), lat.shape)
+        # Pass 1: maps no coarser than the target, coarsest first.
+        coarsest_first = sorted(products, key=lambda p: (-p.pixel_size_m, bool(getattr(p, "is_remote", False))))
+        for product in coarsest_first:
+            todo = np.isnan(heights) & (product.pixel_size_m <= target)
+            _fill(product, lat, lon, method, todo, heights, pixel_size)
+        # Pass 2: anything left (target finer than every covering map), finest first.
+        for product in _preference(products):
+            _fill(product, lat, lon, method, np.isnan(heights), heights, pixel_size)
+        return heights, pixel_size
+    for product in _preference(products):
         todo = np.isnan(heights)
         if not todo.any():
             break
@@ -120,3 +156,13 @@ def heights_at(products: list[DemProduct], lat, lon, method: str = "bilinear"):
         heights.flat[idx] = h[found]
         pixel_size.flat[idx] = product.pixel_size_m
     return heights, pixel_size
+
+
+def _fill(product, lat, lon, method, todo, heights, pixel_size):
+    if not todo.any():
+        return
+    h = product.heights_m(lat[todo], lon[todo], method)
+    found = ~np.isnan(h)
+    idx = np.flatnonzero(todo)[found]
+    heights.flat[idx] = h[found]
+    pixel_size.flat[idx] = product.pixel_size_m

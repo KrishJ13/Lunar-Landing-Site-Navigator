@@ -22,6 +22,10 @@ class DemProduct:
     data: np.ndarray  # (lines, samples), float32, km above reference sphere
     pixel_size_m: float  # nominal ground size of one pixel
     km_scale: float = 1.0  # label SCALING_FACTOR
+    # Rows that hold data, inclusive, for a map that covers only part of its grid's
+    # latitude range (e.g. SLDEM2015, +/-60 deg, placed in a whole-Moon grid).
+    # None means every row.
+    valid_lines: tuple[int, int] | None = None
 
     # ---------- loading ----------
 
@@ -98,19 +102,28 @@ class DemProduct:
             and self.projection.is_global_in_longitude
         )
 
+    def _row_bounds(self) -> tuple[int, int]:
+        return self.valid_lines if self.valid_lines is not None else (0, self.shape[0] - 1)
+
     def _inside(self, line, sample):
         lines, samples = self.shape
         line, sample = np.asarray(line), np.asarray(sample)
-        # A global cylindrical map covers every latitude (rows are clamped at
-        # the poles) and wraps in longitude, so every point is inside.
         if self._wraps_longitude():
-            return np.ones(line.shape, dtype=bool)
-        return (line >= 0) & (line <= lines - 1) & (sample >= 0) & (sample <= samples - 1)
+            # A whole-Moon cylindrical map covers every latitude (rows are clamped
+            # at the poles) and wraps in longitude, so every point is inside;
+            # a latitude-limited one only between its first and last data rows.
+            if self.valid_lines is None:
+                return np.ones(line.shape, dtype=bool)
+            lo, hi = self.valid_lines
+            return (line >= lo) & (line <= hi)
+        lo, hi = self._row_bounds()
+        return (line >= lo) & (line <= hi) & (sample >= 0) & (sample <= samples - 1)
 
     def _bicubic(self, line, sample):
         lines, samples = self.shape
-        line = np.clip(line, 0.0, lines - 1.0)
-        l1 = np.minimum(np.floor(line).astype(np.int64), lines - 2)
+        lo, hi = self._row_bounds()
+        line = np.clip(line, float(lo), float(hi))
+        l1 = np.minimum(np.floor(line).astype(np.int64), hi - 1)
         tl = line - l1
         s1 = np.floor(sample).astype(np.int64)
         ts = sample - s1
@@ -119,7 +132,7 @@ class DemProduct:
             ts = sample - s1
 
         def rows(k):
-            return np.clip(l1 + k, 0, lines - 1)
+            return np.clip(l1 + k, lo, hi)
 
         def cols(k):
             c = s1 + k
@@ -139,8 +152,9 @@ class DemProduct:
 
     def _bilinear(self, line, sample):
         lines, samples = self.shape
-        line = np.clip(line, 0.0, lines - 1.0)
-        l0 = np.minimum(np.floor(line).astype(np.int64), lines - 2)
+        lo, hi = self._row_bounds()
+        line = np.clip(line, float(lo), float(hi))
+        l0 = np.minimum(np.floor(line).astype(np.int64), hi - 1)
         fl = line - l0
 
         s0 = np.floor(sample).astype(np.int64)

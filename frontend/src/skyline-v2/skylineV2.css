@@ -1,0 +1,87 @@
+.v2 { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+.v2-header h1 { margin: 8px 0 4px; }
+.v2-back { font-size: 14px; }
+.v2-badge { font-size: 12px; font-weight: 600; vertical-align: middle; padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-bg); color: var(--accent); }
+.v2-muted { color: var(--muted); }
+.v2-error { color: var(--danger); }
+
+.v2-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; align-items: end;
+  padding: 16px; margin: 16px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.v2-field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.v2-wide { grid-column: span 3; }
+@media (max-width: 720px) { .v2-form { grid-template-columns: 1fr; } .v2-wide { grid-column: auto; } }
+
+.v2-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.v2-tabs button.on { border-color: var(--accent); font-weight: 600; }
+.v2-viewport { display: grid; place-items: center; min-height: 360px; border-radius: 8px; background: #000; color: #9aa3b2; }
+.v2-summary { display: grid; gap: 6px; margin: 16px 0 0; font-size: 14px; }
+.v2-summary div { display: grid; grid-template-columns: 140px 1fr; gap: 12px; }
+.v2-summary dt { color: var(--muted); }
+.v2-summary dd { margin: 0; }
+
+.v2-canvas-wrap { outline: none; }
+.v2-stack { position: relative; }
+.v2-stack canvas { display: block; border-radius: 0 0 8px 8px; touch-action: none; }
+.v2-overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
+.v2-gl.draggable { cursor: grab; }
+.v2-gl.draggable:active { cursor: grabbing; }
+.v2-overhead .v2-stack canvas { border-radius: 8px; }
+.v2-controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 8px; font-size: 14px; }
+.v2-controls label { display: inline-flex; gap: 8px; align-items: center; }
+.v2-note { font-size: 13px; }
+.v2-elevation-legend { width: min(100%, 380px); margin: 16px 0; font-size: 13px; color: var(--muted); }
+.v2-elevation-ramp { height: 12px; margin: 6px 0 4px; border: 1px solid var(--border); border-radius: 3px; }
+.v2-elevation-labels { display: flex; justify-content: space-between; gap: 4px; font-variant-numeric: tabular-nums; }
+
+/* Compass tape (components/CompassStrip.jsx), same look as the original Skyline (App.css). */
+.compass-strip {
+  position: relative;
+  width: 100%;
+  background: #0b0f1a;
+  border-radius: 8px 8px 0 0;
+  color: #e9ecef;
+}
+
+.compass-strip svg {
+  display: block;
+}
+
+.compass-strip .tick {
+  stroke: rgba(255, 255, 255, 0.45);
+}
+
+.compass-strip .tick.major {
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.compass-name {
+  fill: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.compass-deg {
+  fill: rgba(255, 255, 255, 0.6);
+  font-size: 10px;
+}
+
+.heading-marker {
+  fill: var(--series-0);
+}
+
+.heading-readout {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #0b0f1a;
+  box-shadow: -8px 0 8px #0b0f1a;
+  font-size: 12px;
+  color: var(--series-0);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- first-person view ---------- */

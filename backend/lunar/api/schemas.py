@@ -7,6 +7,8 @@ and maps directly onto plotting the panorama.
 Units are in the field names (_deg, _m, _km) so nothing has to be guessed.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 from ..horizon import DEFAULT_MAX_RANGE_M, DEFAULT_OBSERVER_HEIGHT_M
@@ -242,3 +244,25 @@ class RidgesResponse(BaseModel):
     peaks: list[PeakData]
     profiles: VisibleProfiles
     meta: Meta
+
+
+class SiteTerrainRequest(BaseModel):
+    """POST /api/site/terrain: site mesh with optional far mesh and ray-cast horizon.
+    The response is binary (see lunar.api.terrain_payload)."""
+
+    lat: float = Field(..., ge=-90, le=90, description="Site latitude, degrees (planetocentric)")
+    lon: float = Field(..., ge=-360, le=360, description="Site longitude, degrees EAST-positive; any range")
+    diameter_km: float = Field(10.0, ge=5, le=50, description="Landing-site diameter, km (5-50, as Moon Explorer)")
+    observer_height_m: float = Field(
+        1.8, ge=0, le=EYE_HEIGHT_LIMIT_M, description="Eye height above the ground, metres (1.8 = standing astronaut)"
+    )
+    points_across: int = Field(400, ge=50, le=800, description="Target site-grid points across the diameter")
+    far_azimuth_step_deg: float = Field(0.5, ge=0.1, le=5)
+    far_relative_step: float = Field(0.01, ge=0.002, le=0.1, description="Far-mesh ring step as a fraction of distance")
+    max_range_km: float = Field(DEFAULT_MAX_RANGE_M / 1000, gt=1, le=500)
+    include_far_mesh: bool = Field(True, description="Include renderable terrain beyond the landing-site disc")
+    include_panorama: bool = Field(False, description="Render visible terrain from the observer's eye")
+    elevation_product: Literal["ldem_128", "lola_chain"] | None = Field(
+        None, description="Use one LOLA grid or the distance-based LOLA panorama chain")
+    include_ray_skyline: bool = Field(
+        False, description="Include the ray-cast terrain horizon around the observer")
