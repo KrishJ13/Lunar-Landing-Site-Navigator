@@ -11,8 +11,6 @@ git clone https://github.com/KrishJ13/Lunar-Landing-Site-Navigator.git
 cd Lunar-Landing-Site-Navigator
 ```
 
-To run the integration build before it reaches `main`, add `--branch merged_changes` to the clone command once that branch is published.
-
 ### 2. Start the backend
 
 From the repository root, run the commands for your operating system.
