@@ -1,0 +1,164 @@
+{
+  "configuration": {
+    "api": "https://ssd.jpl.nasa.gov/api/horizons.api",
+    "center": "coord@301",
+    "coord_type": "CYLINDRICAL",
+    "site": {
+      "lat_deg": -89.5,
+      "lon_east_deg": 223.0,
+      "elev_m": 0.0,
+      "reference_radius_km": 1737.4
+    },
+    "quantities": "4,20",
+    "apparent": "AIRLESS",
+    "time_type": "UT",
+    "ours": "spkcpo LT+S MOON_ME_DE440_ME421, kernels per kernels_manifest.json"
+  },
+  "retrieved_utc": "2026-11-14T12:23:29+00:00",
+  "evidence": [
+    {
+      "body": "sun",
+      "time": "2027-03-14T12:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 237.84954624156876,
+        "elevation_deg": -1.1050024831351448,
+        "distance_km": 148620397.8536298,
+        "angular_radius_deg": 0.2682055757975466
+      },
+      "horizons": {
+        "azimuth_deg": 237.849546231,
+        "elevation_deg": -1.105002483,
+        "distance_km": 148620397.85595354
+      },
+      "d_az_arcsec": 3.8047517136874376e-05,
+      "d_el_arcsec": -4.865212233085003e-07,
+      "d_range_km": -0.002323746681213379
+    },
+    {
+      "body": "sun",
+      "time": "2027-03-14T18:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 234.80304992734358,
+        "elevation_deg": -1.1334950246300008,
+        "distance_km": 148650797.23079717,
+        "angular_radius_deg": 0.26815072683511976
+      },
+      "horizons": {
+        "azimuth_deg": 234.803049916,
+        "elevation_deg": -1.133495025,
+        "distance_km": 148650797.23315114
+      },
+      "d_az_arcsec": 4.08369146498444e-05,
+      "d_el_arcsec": 1.3319969127678633e-06,
+      "d_range_km": -0.002353966236114502
+    },
+    {
+      "body": "sun",
+      "time": "2027-06-01T03:30:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 358.6241491043559,
+        "elevation_deg": -0.8896191198218266,
+        "distance_km": 151433255.06363535,
+        "angular_radius_deg": 0.2632236493032002
+      },
+      "horizons": {
+        "azimuth_deg": 358.624149147,
+        "elevation_deg": -0.88961912,
+        "distance_km": 151433255.0620691
+      },
+      "d_az_arcsec": -0.00015351877209468512,
+      "d_el_arcsec": 6.414241138230636e-07,
+      "d_range_km": 0.0015662610530853271
+    },
+    {
+      "body": "sun",
+      "time": "2028-01-10T00:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 160.84563134456366,
+        "elevation_deg": -0.06823764540098366,
+        "distance_km": 147428933.40037882,
+        "angular_radius_deg": 0.27037312707015093
+      },
+      "horizons": {
+        "azimuth_deg": 160.845631344,
+        "elevation_deg": -0.068237646,
+        "distance_km": 147428933.40151656
+      },
+      "d_az_arcsec": 2.02917362912558e-06,
+      "d_el_arcsec": 2.1564588115197125e-06,
+      "d_range_km": -0.0011377334594726562
+    },
+    {
+      "body": "earth",
+      "time": "2027-03-14T12:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 132.73203358403106,
+        "elevation_deg": 5.782464213631022,
+        "distance_km": 374496.7043652083,
+        "angular_radius_deg": 0.9747723193196619
+      },
+      "horizons": {
+        "azimuth_deg": 132.732034035,
+        "elevation_deg": 5.782464175,
+        "distance_km": 374496.70777429774
+      },
+      "d_az_arcsec": -0.0016234881854870764,
+      "d_el_arcsec": 0.00013907167897286854,
+      "d_range_km": -0.003409089462365955
+    },
+    {
+      "body": "earth",
+      "time": "2027-03-14T18:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 132.91343555516184,
+        "elevation_deg": 5.63960997577187,
+        "distance_km": 373799.85757289483,
+        "angular_radius_deg": 0.9765896894370407
+      },
+      "horizons": {
+        "azimuth_deg": 132.913435993,
+        "elevation_deg": 5.639609935,
+        "distance_km": 373799.8610633794
+      },
+      "d_az_arcsec": -0.0015762174029987364,
+      "d_el_arcsec": 0.00014677872997026498,
+      "d_range_km": -0.0034904845524579287
+    },
+    {
+      "body": "earth",
+      "time": "2027-06-01T03:30:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 130.14232768665644,
+        "elevation_deg": 5.5521477721272285,
+        "distance_km": 381709.2885200584,
+        "angular_radius_deg": 0.9563517912273023
+      },
+      "horizons": {
+        "azimuth_deg": 130.142327907,
+        "elevation_deg": 5.552147771,
+        "distance_km": 381709.2903748576
+      },
+      "d_az_arcsec": -0.0007932368362162379,
+      "d_el_arcsec": 4.058024316577757e-06,
+      "d_range_km": -0.001854799222201109
+    },
+    {
+      "body": "earth",
+      "time": "2028-01-10T00:00:00Z",
+      "lunar_sky": {
+        "azimuth_deg": 131.3779787388404,
+        "elevation_deg": 4.065545765726428,
+        "distance_km": 368433.690982193,
+        "angular_radius_deg": 0.99081494025888
+      },
+      "horizons": {
+        "azimuth_deg": 131.377979018,
+        "elevation_deg": 4.065545727,
+        "distance_km": 368433.69174373604
+      },
+      "d_az_arcsec": -0.0010049745355900086,
+      "d_el_arcsec": 0.000139415141831023,
+      "d_range_km": -0.0007615430513396859
+    }
+  ]
+}

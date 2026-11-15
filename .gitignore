@@ -16,3 +16,20 @@ logs/
 .idea/
 **/.vscode/*
 !**/.vscode/extensions.json
+
+# Python backend
+backend/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# SPICE kernels (fetch with backend/setup.ps1 / scripts/download_kernels.py)
+backend/kernels/
+
+# Downloaded elevation maps (hundreds of MB to GBs; fetch with backend/scripts/fetch_dem.py)
+backend/data/
+
+# Generated plots from backend/scripts
+backend/output/
