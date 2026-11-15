@@ -6,10 +6,12 @@ Skyline and V2 URLs forward to Moon Explorer.
 
 ## Run locally
 
-The [Docker quick start](../README.md#run-with-docker) runs both services with one
-command. For local development with Node.js 24 and Python, use two terminals.
+Install Python 3.10 or later and Node.js 24, then open two terminals in the
+repository root. Keep both running while you use the site.
 
-On macOS or Linux, run the backend from the repository root:
+### Terminal 1 · Backend on port 8000
+
+On macOS or Linux:
 
 ```sh
 cd backend
@@ -20,8 +22,22 @@ python3 -m venv .venv
 .venv/bin/python -m uvicorn lunar_skyline.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Existing checkouts can skip dependency and data setup after the first run.
-For Windows, see the [backend setup guide](../backend/README.md).
+On Windows PowerShell:
+
+```powershell
+cd backend
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe scripts/download_kernels.py
+.\.venv\Scripts\python.exe scripts/fetch_dem.py --tier starter
+.\.venv\Scripts\python.exe -m uvicorn lunar_skyline.app:app --host 127.0.0.1 --port 8000 --reload
+```
+
+After the first setup, run only the final command from `backend/`. The first
+setup downloads SPICE kernels and the starter NASA elevation maps. Further
+terrain data is downloaded as needed and cached in `backend/data/dem/cache/`.
+
+### Terminal 2 · Frontend on port 5173
 
 In the second terminal, from the repository root:
 
@@ -33,6 +49,12 @@ npm run dev -- --port 5173 --strictPort
 
 Open [Moon Explorer](http://localhost:5173/moon.html). A production server should serve the
 Vite build output and forward `/api` to FastAPI on the same origin.
+
+If the backend reports that port 8000 is already in use, check
+[terrain health](http://127.0.0.1:8000/api/health) and
+[SPICE health](http://127.0.0.1:8000/api/v1/health). Reuse a healthy backend from
+the same checkout. If a different branch is running on port 8000, stop its
+server in the terminal where you started it, then start this branch's backend.
 
 ## Explore and compare
 
