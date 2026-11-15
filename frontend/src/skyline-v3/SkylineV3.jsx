@@ -19,7 +19,7 @@ const VIEWS = [
   ['first-person', 'Landscape'],
   ['overhead', 'Orbital view'],
 ]
-const SECTION_TIMEOUT_MS = 30_000
+const SECTION_TIMEOUT_SECONDS = 60
 
 const sameSite = (a, b) => a && b && a.lat === b.lat && a.lon === b.lon && a.diameterKm === b.diameterKm &&
   a.eyeHeightM === b.eyeHeightM
@@ -130,7 +130,7 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
     setPending(sections.map(([label]) => label))
 
     async function loadSection([label, load, receive]) {
-      const timeout = AbortSignal.timeout(SECTION_TIMEOUT_MS)
+      const timeout = AbortSignal.timeout(SECTION_TIMEOUT_SECONDS * 1000)
       const signal = AbortSignal.any([controller.signal, timeout])
       const start = performance.now()
       try {
@@ -139,7 +139,7 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
         if (inFlight.current === controller) receive({ ...data, receivedMs: performance.now() - start })
       } catch (err) {
         if (inFlight.current === controller) {
-          const detail = timeout.aborted ? 'Timed out after 30 seconds.' : err.message
+          const detail = timeout.aborted ? `Timed out after ${SECTION_TIMEOUT_SECONDS} seconds.` : err.message
           setErrors((current) => [...current, `Could not load ${label}. ${detail}`])
         }
       } finally {
