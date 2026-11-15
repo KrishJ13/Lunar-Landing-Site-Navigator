@@ -25,7 +25,7 @@ const clampPitch = (pitch, minPitch) => Math.max(minPitch, Math.min(MAX_PITCH, p
  * grids for GPU shadows: with the real Sun, every visible ground point gets the
  * fraction of the Sun's disc it sees (shadowField.js), baked once per time step.
  */
-export default function FirstPersonTerrain({ terrain, bodies = null, lighting = { mode: 'fixed' }, field = null, shadowHeightM = 0.5, frameKey,
+export default function FirstPersonTerrain({ terrain, bodies = null, lighting = { mode: 'fixed' }, field = null, shadowHeightM = 0.5, frameKey, waitingForFrame,
   height = 440, aimRef }) {
   const wrapRef = useRef(null)
   const skyRef = useRef(null)
@@ -151,26 +151,39 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
 
   return (
     <div className="v2-fp">
-      <div className="v2-canvas-wrap" ref={wrapRef} style={{ visibility: reveal ? 'visible' : 'hidden' }}
-        tabIndex={0} onKeyDown={onKeyDown}>
-        <CompassStrip heading={heading} fov={fov} />
-        <div className="v2-stack" style={{ height: viewHeight }}>
-          <canvas ref={skyRef} className="v2-sky-canvas" style={{ width, height: viewHeight }} aria-hidden="true" />
-          <canvas
-            ref={glRef}
-            className="v2-gl draggable"
-            style={{ width, height: viewHeight }}
-            role="img"
-            aria-label={`Shaded terrain facing ${Math.round(heading)}° (${compassName(heading)}), pitch ${viewPitch.toFixed(1)}°`}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={() => { drag.current = null }}
-            onPointerCancel={() => { drag.current = null }}
-          />
-          <canvas ref={overlayRef} className="v2-overlay" style={{ width, height: viewHeight }} aria-hidden="true" />
+      <div className="v3-panorama">
+        <div className="v2-canvas-wrap" ref={wrapRef} style={{ visibility: reveal ? 'visible' : 'hidden' }}
+          tabIndex={0} onKeyDown={onKeyDown}>
+          <CompassStrip heading={heading} fov={fov} />
+          <div className="v2-stack" style={{ height: viewHeight }}>
+            <canvas ref={skyRef} className="v2-sky-canvas" style={{ width, height: viewHeight }} aria-hidden="true" />
+            <canvas
+              ref={glRef}
+              className="v2-gl draggable"
+              style={{ width, height: viewHeight }}
+              role="img"
+              aria-label={`Shaded terrain facing ${Math.round(heading)}° (${compassName(heading)}), pitch ${viewPitch.toFixed(1)}°`}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={() => { drag.current = null }}
+              onPointerCancel={() => { drag.current = null }}
+            />
+            <canvas ref={overlayRef} className="v2-overlay" style={{ width, height: viewHeight }} aria-hidden="true" />
+          </div>
         </div>
+        {!reveal && (
+          <div className="v3-panorama-placeholder" role={error ? 'alert' : 'status'}>
+            {error ? (
+              <span className="v2-error">{error}</span>
+            ) : frameKey || waitingForFrame ? (
+              <>
+                <span className="sk-spinner" aria-hidden="true" />
+                Loading panorama…
+              </>
+            ) : 'Panorama unavailable'}
+          </div>
+        )}
       </div>
-      {error && <p className="v2-error">{error}</p>}
       <div className="v2-controls">
         <label>
           Heading {Math.round(heading)}°
@@ -187,8 +200,8 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
           {minPitch > 0 ? 'Reset tilt' : 'Level view'}
         </button>
         {bodies && Object.entries(BODY_STYLE).map(([key, { label }]) => (
-          <button key={key} type="button" onClick={() => lookAt(bodies[key])}>
-            Look at {label}
+          <button key={key} type="button" className={`sk-find sk-tone-${key}`} onClick={() => lookAt(bodies[key])}>
+            Find {label}
           </button>
         ))}
         <span className="v2-muted">Pitch {viewPitch.toFixed(1)}° · drag or arrow keys (Shift = 1°)</span>

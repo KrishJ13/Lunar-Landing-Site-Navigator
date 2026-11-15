@@ -1,9 +1,10 @@
 import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
+import { CALCULATIONS_URL } from '../lib/projectLinks.js'
 import MissionDateFields from '../components/MissionDateFields.jsx'
 import { missionRange, missionUrl, readMissionPlan } from '../lib/missionPlan.js'
 import { SURROUND_KM, fetchIllumination, fetchShadowField, fetchSiteTerrain, fetchVisibilityWindows } from './api.js'
 import FirstPersonTerrain from './FirstPersonTerrain.jsx'
-import IlluminationPanel from './IlluminationPanel.jsx'
+import { DarkLegend } from './IlluminationPanel.jsx'
 import { enuDirection, sunVisibleBesideEarth } from './lighting.js'
 
 const SOLAR_CONSTANT = 1361 // W/m^2 at 1 AU (IAU 2015 Resolution B3 nominal total solar irradiance)
@@ -12,6 +13,10 @@ import OverheadTerrain from './OverheadTerrain.jsx'
 import { bodiesAt, seenAt } from './sequence.js'
 import SkyPanel from './SkyPanel.jsx'
 import Timeline from './Timeline.jsx'
+import ScenarioSaveActions from './ScenarioSaveActions.jsx'
+import ScenarioComparison from './ScenarioComparison.jsx'
+import useScenarios from '../lib/useScenarios.js'
+import { assess, missionScenario, visibilitySeries } from './assessment.js'
 import { EarthCommunications, MissionDetails, SelectedTimeDetails, VisibilityTracks } from './SiteOverview.jsx'
 import { buildMissionSunlight } from './missionSunlight.js'
 
@@ -20,6 +25,7 @@ const VIEWS = [
   ['overhead', 'Orbital view'],
 ]
 const SECTION_TIMEOUT_SECONDS = 60
+const SLOTS = ['A', 'B']
 
 const sameSite = (a, b) => a && b && a.lat === b.lat && a.lon === b.lon && a.diameterKm === b.diameterKm &&
   a.eyeHeightM === b.eyeHeightM
@@ -38,6 +44,8 @@ const sameSequence = (a, b) => sameSite(a, b) && a.timeUtc === b.timeUtc && a.ho
 export default function SkylineV3() {
   const [plan] = useState(() => readMissionPlan(window.location.search))
   const [firstSiteReady, setFirstSiteReady] = useState(false)
+  const [activeScenarios, setActiveScenarios] = useState({})
+  const savedScenarios = useScenarios()
   const siteDates = useRef(plan.siteDates)
   const comparing = plan.sites.length === 2
   const back = plan.sites.length ? missionUrl('moon.html', plan) : './moon.html'
@@ -49,24 +57,33 @@ export default function SkylineV3() {
   }
 
   return (
-    <main className={`v2 v3-analysis-page${comparing ? ' v3-is-comparing' : ''}`}>
-      <header className="v2-header">
-        <a href={back} className="v2-back">← Moon Explorer</a>
-        <h1>{comparing ? 'Compare landing sites' : 'Lunar Skyline V3'}</h1>
+    <main className={`v2 sk v3-analysis-page${comparing ? ' v3-is-comparing' : ''}`}>
+      <header className="v2-header sk-header">
+        <a href={back} className="sk-back">← Moon Explorer</a>
+        <div className="sk-title">
+          <h1>{comparing ? 'Compare landing sites' : 'Lunar Skyline V3'}</h1>
+        </div>
+        <a href={CALCULATIONS_URL} target="_blank" rel="noreferrer">How we calculated things</a>
+        {comparing && activeScenarios.A && activeScenarios.B && <a href="#compare">View comparison ↓</a>}
       </header>
       {plan.sites.length
         ? <div className="v3-analysis-grid">{plan.sites.map((site, index) =>
-          <SiteAnalysis key={index} site={site} siteName={`Site ${index + 1}`} number={index + 1}
+          <SiteAnalysis key={index} site={site} siteName={`Site ${SLOTS[index]}`} number={index + 1}
             settings={plan.settings} initialDates={plan.siteDates[index]} enabled={index === 0 || firstSiteReady}
             onFirstLoadSettled={index === 0 ? () => setFirstSiteReady(true) : undefined}
+            savedScenarios={savedScenarios}
+            onAssessment={(scenario) => setActiveScenarios((current) => ({ ...current, [SLOTS[index]]: scenario }))}
             onDatesApplied={(dates) => updateLink(index, dates)} />,
         )}</div>
         : <p className="v2-muted">Choose one or two landing sites in Moon Explorer to get started.</p>}
+      {comparing && <ScenarioComparison scenarios={activeScenarios} />}
+      <ScenarioComparison scenarios={savedScenarios} savedReport />
     </main>
   )
 }
 
-function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled, onFirstLoadSettled, onDatesApplied }) {
+function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled, onFirstLoadSettled, onDatesApplied,
+  savedScenarios, onAssessment }) {
   const [dates, setDates] = useState(initialDates)
   const [inputs, setInputs] = useState(null)
   const [terrain, setTerrain] = useState(null)
@@ -83,6 +100,11 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
   const [advanced, setAdvanced] = useState(false)
   const inFlight = useRef(null)
   const firstPersonAim = useRef(null)
+  const series = useMemo(() => sequence && terrain ? visibilitySeries(sequence, terrain) : null, [sequence, terrain])
+  const scenario = useMemo(() => series ? missionScenario(inputs, assess(sequence, terrain, series)) : null,
+    [inputs, sequence, terrain, series])
+  const reportAssessment = useEffectEvent(() => onAssessment(scenario))
+  useEffect(() => { reportAssessment() }, [scenario])
   const range = missionRange(dates, settings.stepMinutes)
 
   async function build(next) {
@@ -243,12 +265,12 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
         <h2>{siteName}</h2>
         <p className="v2-muted">{site.lat.toFixed(4)}° lat, {site.lon.toFixed(4)}° lon east · {site.diameterKm} km across</p>
       </header>
-      <form className="v2-form v3-mission-date-form" onSubmit={applyDates}>
+      <form className="v2-form v3-mission-date-form sk-form" onSubmit={applyDates}>
         <MissionDateFields dates={dates} onChange={setDates} />
-        <button type="submit" disabled={!enabled || !!range.error || pending.length > 0}>Update dates</button>
+        <button type="submit" className="sk-primary" disabled={!enabled || !!range.error || pending.length > 0}>Update dates</button>
         {range.error && <p className="v2-error v2-wide" role="alert">{range.error}</p>}
       </form>
-      {!enabled && <p className="v2-muted" role="status">Waiting for Site 1 to load.</p>}
+      {!enabled && <p className="v2-muted" role="status">Waiting for Site A to load.</p>}
 
       {pending.length > 0 && (
         <p className="v2-muted" role="status">
@@ -283,6 +305,7 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
               <>
                 <FirstPersonTerrain key={`${inputs.lat},${inputs.lon},${inputs.eyeHeightM}`}
                   terrain={terrain} bodies={bodies} lighting={lighting} field={field} frameKey={frameKey}
+                  waitingForFrame={pending.includes('shadows') || pending.includes('sunlight timeline')}
                   shadowHeightM={inputs.mastHeightM} aimRef={firstPersonAim} />
                 {/* Legacy in-view elevation sources:
                 <p className="v2-muted v2-note">
@@ -302,6 +325,8 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
                     onClick={() => setOverheadMode('mission')}>Mission sunlight</button> */}
                   <button type="button" disabled={!missionLayers?.energy} aria-pressed={overheadMode === 'energy'}
                     onClick={() => setOverheadMode('energy')}>Solar energy received</button>
+                  <button type="button" disabled={!sequence} aria-pressed={overheadMode === 'dark'}
+                    onClick={() => setOverheadMode('dark')}>Time in darkness</button>
                 </div>
                 <OverheadTerrain key={`${inputs.lat},${inputs.lon},${inputs.diameterKm}`} terrain={terrain}
                   frameKey={missionLayer ?? frameKey}
@@ -311,6 +336,9 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
                   sunNow={field && !missionLayer ? sunNow : null} intensity={overheadMode === 'intensity' && !!field}
                   missionLayer={missionLayer}
                   shadowHeightM={inputs.mastHeightM} />
+                {overheadMode === 'dark' && sequence && <DarkLegend
+                  periodHours={(sequence.header.times.count - 1) * sequence.header.times.step_minutes / 60}
+                  step={k} stepMinutes={sequence.header.times.step_minutes} />}
                 <p className="v2-muted v2-note">
                   Amber outline · {terrain.header.site.diameter_km} km landing area
                   {' · '}{SURROUND_KM} km of surrounding terrain
@@ -321,32 +349,21 @@ function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled,
           {sequence && <Timeline result={sequence} step={k} onStep={setStep}
             playing={playing} setPlaying={setPlaying}
             tracks={windows && <VisibilityTracks windows={windows} elapsed={elapsed} />} />}
-          <details className="v3-advanced" open={advanced} onToggle={(e) => setAdvanced(e.currentTarget.open)}>
+          {scenario && <ScenarioSaveActions scenario={scenario} scenarios={savedScenarios} />}
+          {terrain && <details className="v3-advanced" open={advanced} onToggle={(e) => setAdvanced(e.currentTarget.open)}>
             <summary>Advanced details</summary>
             {advanced && <>
-              {windows && <p className="v2-muted v2-note">
-                Visibility is calculated against the terrain horizon every {windows.cadence_s / 60} minutes before refining
-                crossings. Short windows may be missed. Sunlight means part of the Sun is above terrain. Earth visibility uses
-                its centre. These estimates exclude eclipses and radio link performance.
-              </p>}
-              {terrain && <LightingControl mode={lightMode} onChange={setLightMode} bodies={frameKey ? bodies : null} />}
-              {terrain && bodies && <SkyPanel bodies={bodies} terrain={terrain} />}
-              {sequence && (
-                <IlluminationPanel result={sequence} mode={overheadMode} step={k} sunNow={sunNow}
-                  onMode={(m) => { setOverheadMode(m); setView('overhead') }} />
-              )}
-              {terrain && <TerrainSummary terrain={terrain} inputs={inputs} />}
-              {!!terrain?.header.elevation_maps?.length &&
-                <p className="v2-muted v2-note">Elevation maps near to far · {terrain.header.elevation_maps.join(' → ')}</p>}
+              <LightingControl mode={lightMode} onChange={setLightMode} />
+              {bodies && <SkyPanel bodies={bodies} terrain={terrain} />}
             </>}
-          </details>
+          </details>}
         </section>
       )}
     </section>
   )
 }
 
-function LightingControl({ mode, onChange, bodies }) {
+function LightingControl({ mode, onChange }) {
   const group = useId()
   return (
     <div className="v2-lighting">
@@ -361,50 +378,9 @@ function LightingControl({ mode, onChange, bodies }) {
           Fixed light (terrain shape only)
         </label>
       </fieldset>
-      {mode === 'sun' && bodies && (
-        <p className="v2-muted v2-note">
-          {bodies ? `Sun ${bodies.sun.elevation_deg.toFixed(2)}° up at azimuth ${bodies.sun.azimuth_deg.toFixed(2)}°. ` : ''}
-          Sunlight uses Moon Explorer's lighting model on a uniform grey surface. Shadows are traced on the GPU for
-          every visible point: a ray towards the Sun over nested height grids out to 600 km (1.5 m at your feet),
-          Moon's curvature included, from a point at the shadow height set in the form (as the sunlight figures).
-          Isolated elevation spikes are corrected. Shadowed ground keeps the fixed-light relief at 12 % brightness
-          (not physical) so its shape stays readable.
-        </p>
-      )}
     </div>
   )
 }
-
-function TerrainSummary({ terrain, inputs }) {
-  const { header, arrays } = terrain
-  const { site, site_grid: grid, skyline } = header
-  const bytes = Object.values(arrays).reduce((n, a) => n + a.byteLength, 0)
-  const rows = [
-    ['Site', `${inputs.siteName ?? 'Custom'} · ${site.lat.toFixed(4)}°, ${site.lon.toFixed(4)}°E`],
-    ['Start (UTC)', `${inputs.timeUtc.replace('T', ' ').replace(':00Z', '')} for ${(inputs.hours / 24).toFixed(2)} days every ${inputs.stepMinutes} min (the terrain does not depend on time)`],
-    ['Ground height', `${site.ground_m.toLocaleString()} m above the 1,737.4 km sphere`],
-    ['Eye', `${site.eye_height_m} m above ground → ${site.eye_m.toLocaleString()} m`],
-    ['Landing site', `${site.diameter_km} km across`],
-    ['Site grid', `${grid.points} × ${grid.points} points, ${grid.spacing_m.toFixed(1)} m apart (${fmtMaps(grid.maps_used)})`],
-    ['Local horizon', `${skyline.azimuth_step_deg}° bearing samples, terrain checked up to ${skyline.max_range_m / 1000} km away`],
-    ['Data', `${(bytes / 1e6).toFixed(2)} MB decoded, received in ${(terrain.receivedMs / 1000).toFixed(2)} s`],
-  ]
-  return (
-    <dl className="v2-summary">
-      {rows.map(([k, v]) => (
-        <div key={k}>
-          <dt>{k}</dt>
-          <dd>{v}</dd>
-        </div>
-      ))}
-    </dl>
-  )
-}
-
-function fmtMaps(used) {
-  return Object.entries(used).map(([px, n]) => `${px} pixels: ${n.toLocaleString()} points`).join(', ')
-}
-
 
 /** Steps each lattice point has been dark (< 0.1 % of the Sun, lit byte 0) up to each step; Uint16 (T x nodes). */
 function darkRunLengths({ header, arrays }) {

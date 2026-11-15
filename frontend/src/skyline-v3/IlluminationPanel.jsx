@@ -74,13 +74,12 @@ export function IntensityLegend({ flux }) {
 }
 
 /** How long each point has been in darkness (< 0.1 % of the Sun visible) as of this step. */
-function DarkLegend({ periodHours, step, stepMinutes }) {
+export function DarkLegend({ periodHours, step, stepMinutes }) {
   const sofar = (step * stepMinutes) / 60
   return (
     <figure className="v2-elevation-legend">
       <figcaption>
-        Time each point has been continuously dark up to this step ({hrs(sofar)} into the period; points dark since the
-        start show at most that). Lit points read 0 h.
+        Continuous darkness at the selected time · {hrs(sofar)} since mission start
       </figcaption>
       <div className="v2-elevation-ramp" style={{ background: heatGradient }} aria-hidden="true" />
       <div className="v2-elevation-labels">

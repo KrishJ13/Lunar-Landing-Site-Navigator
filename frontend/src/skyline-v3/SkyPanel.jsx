@@ -13,7 +13,6 @@ export default function SkyPanel({ bodies, terrain }) {
     <section className="v2-sky" aria-label="Sun and Earth">
       <div className="v2-sky-chart">
         <SkyChart data={bodies} selected={selected} onSelect={setSelected} />
-        <p className="v2-muted v2-note">Sky chart ignores terrain; marker sizes are not to scale.</p>
       </div>
       <BodyTable bodies={bodies} terrain={terrain} />
     </section>

@@ -1,4 +1,5 @@
 import { MAP_DIRECTORY } from './globeShader.js'
+import ProjectLinks from './ProjectLinks.jsx'
 import './explorer.css'
 
 function Menu() {
@@ -7,6 +8,7 @@ function Menu() {
       <div className="moon-menu-inner">
         <header>
           <h1>Lunar Landing Site Navigator</h1>
+          <ProjectLinks />
         </header>
         <nav aria-label="Lunar tools">
           <a className="moon-menu-card moon-menu-explorer" href="./moon.html">

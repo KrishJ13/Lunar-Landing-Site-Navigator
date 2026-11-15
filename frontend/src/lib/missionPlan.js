@@ -1,3 +1,5 @@
+import { readJourney, wrapLongitude } from './journey.js'
+
 export const PLAYBACK_INTERVALS = [15, 30, 60, 180, 360]
 export const MIN_DIAMETER_KM = 5
 export const MAX_DIAMETER_KM = 50
@@ -81,6 +83,19 @@ function parseSite(value) {
 export function readMissionPlan(search) {
   const query = new URLSearchParams(search)
   const saved = loadMissionSettings()
+  // Existing saved scenarios and share links use the older lat/lon query format.
+  const legacy = query.has('site') ? null : readJourney(search)
+  if (legacy?.site) {
+    const defaults = defaultMissionDates()
+    const start = (legacy.startUtc ?? legacy.timeUtc)?.slice(0, 16) ?? defaults.start
+    const end = utcDate(Date.parse(start + ':00Z') + (legacy.hours ?? 72) * 3_600_000)
+    const dates = { start, end }
+    const sites = [legacy.site, legacy.compare].filter(Boolean).map(({ lat, lon, diameterKm }) =>
+      ({ lat, lon: wrapLongitude(lon), diameterKm: diameterKm ?? 10 }))
+    const settings = normalizeSettings(Object.fromEntries(Object.entries(saved).map(([key, val]) =>
+      [key, legacy[key] ?? val])))
+    return { sites, dates, settings, siteDates: sites.map(() => dates) }
+  }
   const settings = normalizeSettings(Object.fromEntries(Object.entries(saved).map(([key, value]) =>
     [key, query.has(key) && query.get(key).trim() ? Number(query.get(key)) : value])))
   const defaultDates = defaultMissionDates()
