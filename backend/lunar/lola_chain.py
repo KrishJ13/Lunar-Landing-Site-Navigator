@@ -40,10 +40,12 @@ class LolaChain:
         by_name = {}
         for product in sorted(products, key=lambda p: bool(getattr(p, "is_remote", False))):
             by_name.setdefault(product.name, product)
+        self.fallback = by_name.get("ldem_128") if maps != GLOBAL_MAPS else None
         missing = [name for name in maps if name not in by_name]
-        if missing:
+        if missing and self.fallback is None:
             raise LookupError(f"Elevation maps unavailable: missing {', '.join(missing)}")
-        self.global_maps = [by_name[name] for name in maps]
+        self.global_maps = [by_name.get(name, self.fallback) for name in maps]
+        self.used_fallback = False
         pole = "s" if lat < 0 else "n"
         polar = by_name.get(f"ldem_875{pole}_5m") if abs(lat) >= 87.5 else None
         self.polar = polar if polar is not None and bool(polar.contains(lat, lon)) else None
@@ -53,11 +55,13 @@ class LolaChain:
             check = by_name.get(f"ldem_80{pole}_20m")
             if check is not None:
                 foreground_products.append(check)
-        self.foreground = ForegroundSurface(foreground_products, lat, lon)
+        self.foreground = ForegroundSurface(foreground_products, lat, lon, fallback=self.fallback)
 
     @property
     def maps(self):
-        names = [product.name for product in self.global_maps]
+        names = list(dict.fromkeys(product.name for product in self.global_maps))
+        if self.used_fallback and self.fallback is not None and self.fallback.name not in names:
+            names.append(self.fallback.name)
         return [self.polar.name, *names] if self.polar is not None else names
 
     def normal_spacing(self, distance):
@@ -105,7 +109,9 @@ class LolaChain:
         coverage = total > 0
         np.divide(height, total, out=height, where=coverage)
         if not coverage.all():
-            fallback = self.global_maps[0]
-            height[~coverage] = fallback.heights_m(lat[~coverage], lon[~coverage])
+            fallback = self.fallback if self.fallback is not None else self.global_maps[0]
+            values = fallback.heights_m(lat[~coverage], lon[~coverage])
+            height[~coverage] = values
             spacing[~coverage] = fallback.pixel_size_m
+            self.used_fallback |= self.fallback is not None and bool(np.isfinite(values).any())
         return height, spacing

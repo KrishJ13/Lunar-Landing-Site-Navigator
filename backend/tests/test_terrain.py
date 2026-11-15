@@ -12,7 +12,9 @@ from lunar.config import MOON_RADIUS_M as R
 from lunar.dem import DemProduct
 from lunar.foreground import correct_outliers
 from lunar.geometry import destination
-from lunar.lola_chain import LolaChain
+from lunar.dem.remote import LazyRemoteProduct, remote_specs
+from lunar.lola_chain import LolaChain, best_maps
+from lunar.shadow_field import NO_DATA, build_field
 from lunar.panorama import _correct_isolated_peaks, _foreground_normals, _normals, _visible_shade
 from lunar.skyline import compute_skyline
 from lunar.terrain import build_site_terrain, far_mesh_skyline, ring_distances, site_grid_xy
@@ -182,6 +184,39 @@ def test_lola_chain_blends_aligned_samples_and_uses_the_polar_grid_at_the_eye(ma
     assert header["site"]["ground_m"] == pytest.approx(40)
     assert np.isfinite(arrays["ray_skyline_deg"]).all()
     assert arrays["panorama_shade"].shape[1] == len(arrays["ray_skyline_deg"])
+
+
+@pytest.mark.parametrize("latitude,toward_equator", [(60.0, 180), (-60.0, 0)])
+def test_best_maps_fill_the_polar_boundary(latitude, toward_equator, flat_moon, tmp_path):
+    template = flat_moon[0]
+    global_map = replace(template, name="ldem_128", pixel_size_m=237,
+                         data=np.full_like(template.data, 0.1))
+    specs = {spec.name: spec for spec in remote_specs()}
+    preferred = []
+    for name in best_maps(latitude):
+        product = LazyRemoteProduct(specs[name], tmp_path)
+        product._product = replace(template, name=name, pixel_size_m=specs[name].pixel_size_m,
+                                   data=np.full_like(template.data, 0.2))
+        preferred.append(product)
+    products = [*preferred, global_map]
+
+    chain = LolaChain(products, latitude, 50.0, maps=best_maps(latitude))
+    distances = np.array([0.0, 1000.0, 35_000.0])
+    lats, lons = destination(latitude, 50.0, toward_equator, distances)
+    heights, spacing = chain.sample(lats, lons, toward_equator, distances)
+    np.testing.assert_allclose(heights, [200, 100, 100], atol=1e-4)
+    np.testing.assert_array_equal(spacing, [60, 237, 237])
+    assert np.isfinite(chain.foreground.height).all()
+
+    terrain = build_site_terrain(products, latitude, 50.0, 5000, with_far_mesh=False,
+                                 with_panorama=True, with_lola_chain=True, chain_maps=best_maps(latitude),
+                                 far_azimuth_step_deg=5, max_range_m=35_000, surround_m=10_000)
+    assert terrain.ground_m == pytest.approx(200)
+    assert np.isfinite(terrain.site_height_m[terrain.in_disc()]).all()
+    assert np.isfinite(terrain.ray_skyline_deg).all()
+    assert "ldem_128" in terrain.elevation_maps
+    field = build_field(terrain.surface, latitude, 50.0, levels=(768.0, 6000.0, 40_000.0), size=32)
+    assert all((level["q"] != NO_DATA).all() for level in field)
 
 
 def test_ray_skyline_matches_lunar_skyline_on_the_same_map(make_polar):

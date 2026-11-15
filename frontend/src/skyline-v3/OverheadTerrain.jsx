@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { ELEVATION_COLORS, lookAt, multiply, perspective, project } from './terrainRenderer.js'
 import { sizeCanvas, useWidth } from './useCanvasSize.js'
 import { useTerrainRenderer } from './useTerrainRenderer.js'
@@ -16,11 +17,12 @@ const formatElevation = new Intl.NumberFormat(undefined, { maximumFractionDigits
  * boundary; the yellow marker is the observer's eye.
  */
 export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' }, overlay = null, field = null, bodies = null,
-  sunNow = null, intensity = false, shadowHeightM = 0.5, height = 440 }) {
+  sunNow = null, intensity = false, shadowHeightM = 0.5, frameKey, height = 440 }) {
   const wrapRef = useRef(null)
   const glRef = useRef(null)
   const overlayRef = useRef(null)
-  const width = useWidth(wrapRef)
+  const measuredWidth = useWidth(wrapRef)
+  const width = measuredWidth ?? 800
   const diameter = terrain.header.site.diameter_km * 1000
   const eye = terrain.header.site.eye_height_m
   const [yaw, setYaw] = useState(0) // compass direction the camera looks towards
@@ -30,6 +32,9 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
   const homeDistance = 1.15 * span
   const [distance, setDistance] = useState(homeDistance)
   const [showElevation, setShowElevation] = useState(true)
+  const [drawnFrame, setDrawnFrame] = useState(null)
+  const [drawError, setDrawError] = useState(null)
+  const reveal = frameKey !== null && drawnFrame === frameKey && !error && !drawError
   const drag = useRef(null)
 
   const { viewProj, camera } = useMemo(() => {
@@ -60,15 +65,24 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
   }, [rendererRef, geometry, field, shadowHeightM, sunNow])
 
   useEffect(() => {
-    const dpr = sizeCanvas(glRef.current, width, height)
-    sizeCanvas(overlayRef.current, width, height)
+    if (!frameKey || measuredWidth === null || error || drawError) return
     const frame = requestAnimationFrame(() => {
-      rendererRef.current?.draw({ viewProj, camera, lighting, showElevation, dpr, intensity, sunNow })
-      drawOverlay(overlayRef.current.getContext('2d'), viewProj, width, height, dpr, diameter, eye, bodies,
-        geometry.outerRadius)
+      const renderer = rendererRef.current
+      if (!renderer) return
+      try {
+        const dpr = sizeCanvas(glRef.current, width, height)
+        sizeCanvas(overlayRef.current, width, height)
+        renderer.draw({ viewProj, camera, lighting, showElevation, dpr, intensity, sunNow })
+        drawOverlay(overlayRef.current.getContext('2d'), viewProj, width, height, dpr, diameter, eye, bodies,
+          geometry.outerRadius)
+        if (drawnFrame !== frameKey) flushSync(() => setDrawnFrame(frameKey))
+      } catch (err) {
+        setDrawError(err.message)
+      }
     })
     return () => cancelAnimationFrame(frame)
-  }, [rendererRef, geometry, viewProj, camera, lighting, overlay, field, bodies, sunNow, intensity, showElevation, width, height, diameter, eye])
+  }, [frameKey, drawnFrame, measuredWidth, error, drawError, rendererRef, geometry, viewProj, camera, lighting, overlay, field,
+    bodies, sunNow, intensity, showElevation, width, height, diameter, eye])
 
   useEffect(() => {
     const el = glRef.current
@@ -93,7 +107,7 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
 
   return (
     <div className="v2-overhead">
-      <div className="v2-canvas-wrap" ref={wrapRef}>
+      <div className="v2-canvas-wrap" ref={wrapRef} style={{ visibility: reveal ? 'visible' : 'hidden' }}>
         <div className="v2-stack" style={{ height }}>
           <canvas
             ref={glRef}
@@ -109,7 +123,7 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
           <canvas ref={overlayRef} className="v2-overlay" style={{ width, height }} aria-hidden="true" />
         </div>
       </div>
-      {error && <p className="v2-error">{error}</p>}
+      {(error || drawError) && <p className="v2-error">{error || drawError}</p>}
       <div className="v2-controls">
         <span>Looking {Math.round(yaw)}° · tilt {Math.round(tilt)}° · camera {(distance / 1000).toFixed(1)} km from the centre</span>
         <button type="button" onClick={() => { setYaw(0); setTilt(40); setDistance(homeDistance) }}>Reset view</button>

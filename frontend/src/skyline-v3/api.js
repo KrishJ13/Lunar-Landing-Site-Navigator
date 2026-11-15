@@ -1,6 +1,7 @@
 // API client for Lunar Skyline V3. Relative URLs: Vite proxies /api to the
 // backend (vite.config.js); VITE_API_BASE overrides.
 const API_BASE = import.meta.env.VITE_API_BASE ?? ''
+const ELEVATION_PRODUCT = 'best'
 export const SURROUND_KM = 10 // overhead context ring beyond the site edge (greyed)
 
 async function errorMessage(response) {
@@ -22,14 +23,14 @@ async function errorMessage(response) {
  *
  * @returns {Promise<{header: object, arrays: Record<string, Float32Array|Uint8Array>}>}
  */
-export async function fetchSiteTerrain({ lat, lon, diameterKm, observerHeightM, elevationProduct }, signal) {
+export async function fetchSiteTerrain({ lat, lon, diameterKm, observerHeightM }, signal) {
   const response = await fetch(`${API_BASE}/api/site/terrain`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       lat, lon, diameter_km: diameterKm, observer_height_m: observerHeightM,
       include_far_mesh: false, include_panorama: true, far_azimuth_step_deg: 0.25,
-      elevation_product: elevationProduct, distance_log16: true, despike: true, surround_km: SURROUND_KM,
+      elevation_product: ELEVATION_PRODUCT, distance_log16: true, despike: true, surround_km: SURROUND_KM,
     }),
     signal,
   })
@@ -37,7 +38,7 @@ export async function fetchSiteTerrain({ lat, lon, diameterKm, observerHeightM, 
     throw new Error(await errorMessage(response))
   }
   const { header, arrays } = decodeTerrainPayload(await response.arrayBuffer())
-  if (header.elevation_product !== elevationProduct) {
+  if (header.elevation_product !== ELEVATION_PRODUCT) {
     throw new Error('The terrain server did not select the requested LOLA mode. Restart the updated backend and try again.')
   }
 
@@ -121,11 +122,11 @@ export async function fetchIllumination({ lat, lon, diameterKm, mastHeightM, eye
  * Nested height grids around the site for GPU shadows (POST /api/site/shadow-field;
  * backend/lunar/shadow_field.py): arrays.heights_q is (levels, size, size) uint16.
  */
-export async function fetchShadowField({ lat, lon, elevationProduct }, signal) {
+export async function fetchShadowField({ lat, lon }, signal) {
   const response = await fetch(`${API_BASE}/api/site/shadow-field`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lat, lon, elevation_product: elevationProduct }),
+    body: JSON.stringify({ lat, lon, elevation_product: ELEVATION_PRODUCT }),
     signal,
   })
   if (!response.ok) throw new Error(await errorMessage(response))

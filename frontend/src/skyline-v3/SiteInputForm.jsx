@@ -19,7 +19,7 @@ const parseUtc = (v) => Date.parse(v + ':00Z')
  * Inputs for one landing site: where (preset or lat/lon), eye height, landing-site
  * diameter, and a UTC time range with a step (15 min at the finest). Calls
  * onSubmit({ lat, lon, siteName, eyeHeightM, diameterKm, timeUtc, hours, stepMinutes,
- * mastHeightM, elevationProduct }).
+ * mastHeightM }).
  *
  * The terrain does not depend on the time; the range sets the Sun and Earth
  * positions and the shadows the timeline plays through.
@@ -35,7 +35,6 @@ export default function SiteInputForm({ onSubmit, loading }) {
   const [until, setUntil] = useState(nowUtc(3))
   const [stepMinutes, setStepMinutes] = useState(15)
   const [mast, setMast] = useState(2)
-  const [elevationProduct, setElevationProduct] = useState('best')
 
   function choosePreset(name) {
     setPreset(name)
@@ -69,7 +68,6 @@ export default function SiteInputForm({ onSubmit, loading }) {
       hours,
       stepMinutes,
       mastHeightM: mast,
-      elevationProduct,
     })
   }
 
@@ -128,14 +126,6 @@ export default function SiteInputForm({ onSubmit, loading }) {
         <span>Landing-site diameter: <strong>{diameter} km</strong></span>
         <input type="range" min={MIN_DIAMETER_KM} max={MAX_DIAMETER_KM} step={1} value={diameter}
           onChange={(e) => setDiameter(Number(e.target.value))} />
-      </label>
-      <label className="v2-field v2-wide">
-        <span>Elevation data</span>
-        <select value={elevationProduct} onChange={(e) => setElevationProduct(e.target.value)}>
-          <option value="best">Best maps (polar 5–240 m near the poles, SLDEM2015 below 60°)</option>
-          <option value="lola_chain">LOLA resolution chain (as V2)</option>
-          <option value="ldem_128">LOLA 128 only</option>
-        </select>
       </label>
       <button type="submit" disabled={!ok || loading}>{loading ? 'Loading…' : 'Build landscape and timeline'}</button>
     </form>

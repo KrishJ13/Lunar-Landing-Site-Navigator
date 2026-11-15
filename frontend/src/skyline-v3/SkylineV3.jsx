@@ -16,9 +16,10 @@ const VIEWS = [
   ['first-person', 'First-person 360°'],
   ['overhead', 'Overhead (orbit)'],
 ]
+const SECTION_TIMEOUT_MS = 30_000
 
 const sameSite = (a, b) => a && b && a.lat === b.lat && a.lon === b.lon && a.diameterKm === b.diameterKm &&
-  a.eyeHeightM === b.eyeHeightM && a.elevationProduct === b.elevationProduct
+  a.eyeHeightM === b.eyeHeightM
 const sameSequence = (a, b) => sameSite(a, b) && a.timeUtc === b.timeUtc && a.hours === b.hours &&
   a.stepMinutes === b.stepMinutes && a.mastHeightM === b.mastHeightM
 
@@ -38,68 +39,84 @@ export default function SkylineV3() {
   const [sequence, setSequence] = useState(null)
   const [field, setField] = useState(null)
   const [step, setStep] = useState(0)
-  const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(null) // null, 'terrain' or 'sequence'
+  const [errors, setErrors] = useState([])
+  const [pending, setPending] = useState([])
   const [view, setView] = useState('first-person')
   const [lightMode, setLightMode] = useState('sun')
   const [overheadMode, setOverheadMode] = useState('shadows')
   const inFlight = useRef(null)
 
-  // Terrain and the time sequence are independent requests: run them together.
   async function build(next) {
-    if (sameSequence(next, inputs) && sequence) return
+    const reuseSite = sameSite(next, inputs)
+    const reuseSequence = sameSequence(next, inputs) && sequence
+    const needsLandscape = !reuseSite || !terrain
+    const sections = []
+    if (needsLandscape) {
+      sections.push(['landscape', (signal) => fetchSiteTerrain({
+        lat: next.lat, lon: next.lon, diameterKm: next.diameterKm, observerHeightM: next.eyeHeightM,
+      }, signal), setTerrain])
+    }
+    if (!reuseSite || !field) {
+      sections.push(['shadows', (signal) => fetchShadowField({
+        lat: next.lat, lon: next.lon,
+      }, signal), setField])
+    }
+    if (!reuseSequence) {
+      sections.push(['sunlight timeline', (signal) => fetchIllumination({
+        lat: next.lat, lon: next.lon, diameterKm: next.diameterKm, mastHeightM: next.mastHeightM,
+        eyeHeightM: next.eyeHeightM, startUtc: next.timeUtc, hours: next.hours, stepMinutes: next.stepMinutes,
+      }, signal), setSequence])
+    }
+    if (!sections.length) return
+
     inFlight.current?.abort()
     const controller = new AbortController()
     inFlight.current = controller
-    setError(null)
-    const needTerrain = !sameSite(next, inputs) || !terrain
-    setLoading(needTerrain ? 'terrain' : 'sequence')
-    if (needTerrain) setSequence(null)
-    const t0 = performance.now()
-    const terrainRequest = needTerrain
-      ? fetchSiteTerrain(
-        { lat: next.lat, lon: next.lon, diameterKm: next.diameterKm, observerHeightM: next.eyeHeightM,
-          elevationProduct: next.elevationProduct },
-        controller.signal,
-      ).then((t) => ({ ...t, receivedMs: performance.now() - t0 }))
-      : Promise.resolve(terrain)
-    const fieldRequest = needTerrain
-      ? fetchShadowField({ lat: next.lat, lon: next.lon, elevationProduct: next.elevationProduct }, controller.signal)
-      : Promise.resolve(field)
-    const sequenceRequest = fetchIllumination({
-      lat: next.lat, lon: next.lon, diameterKm: next.diameterKm, mastHeightM: next.mastHeightM,
-      eyeHeightM: next.eyeHeightM, startUtc: next.timeUtc, hours: next.hours, stepMinutes: next.stepMinutes,
-    }, controller.signal).then((s) => ({ ...s, receivedMs: performance.now() - t0 }))
-    try {
-      const [t, s, f] = await Promise.all([terrainRequest, sequenceRequest, fieldRequest])
-      if (inFlight.current !== controller) return
-      setTerrain(t)
-      setField(f)
-      setInputs(next)
-      setSequence(s)
-      setStep(0)
-    } catch (err) {
-      if (inFlight.current === controller && err.name !== 'AbortError') {
-        controller.abort()
-        setError(err.message)
-      }
-    } finally {
-      if (inFlight.current === controller) setLoading(null)
+    setInputs(next)
+    if (!reuseSite) {
+      setTerrain(null)
+      setField(null)
     }
+    if (!reuseSequence) setSequence(null)
+    setStep(0)
+    setErrors([])
+    setPending(sections.map(([label]) => label))
+
+    async function loadSection([label, load, receive]) {
+      const timeout = AbortSignal.timeout(SECTION_TIMEOUT_MS)
+      const signal = AbortSignal.any([controller.signal, timeout])
+      const start = performance.now()
+      try {
+        const data = await load(signal)
+        signal.throwIfAborted()
+        if (inFlight.current === controller) receive({ ...data, receivedMs: performance.now() - start })
+      } catch (err) {
+        if (inFlight.current === controller) {
+          const detail = timeout.aborted ? 'Timed out after 30 seconds.' : err.message
+          setErrors((current) => [...current, `Could not load ${label}. ${detail}`])
+        }
+      } finally {
+        if (inFlight.current === controller) setPending((current) => current.filter((item) => item !== label))
+      }
+    }
+    // Both views use the landscape response. Give it priority over the lighting requests.
+    if (needsLandscape) await loadSection(sections.shift())
+    if (!controller.signal.aborted) sections.forEach(loadSection)
   }
 
   const k = sequence ? Math.min(step, sequence.header.times.count - 1) : 0
   const bodies = useMemo(() => (sequence ? bodiesAt(sequence, k) : null), [sequence, k])
+  const frameKey = terrain && field && bodies ? inputs : null
   const seen = useMemo(() => (sequence ? seenAt(sequence, k) : null), [sequence, k])
   const lighting = useMemo(() => {
-    if (lightMode !== 'sun' || !bodies) return { mode: 'fixed' }
+    if (lightMode !== 'sun' || !bodies || !field) return { mode: 'fixed' }
     return {
       mode: 'sun',
       sun: enuDirection(bodies.sun.azimuth_deg, bodies.sun.elevation_deg),
       sunRadius: (bodies.sun.angular_radius_deg * Math.PI) / 180,
       sunVisible: sunVisibleBesideEarth(bodies.sun, bodies.earth),
     }
-  }, [lightMode, bodies])
+  }, [lightMode, bodies, field])
 
   // The Sun at the step for maps that need it whatever the lighting choice:
   // S(t) = 1361 W/m^2 x (1 AU / r)^2 (nominal total solar irradiance, IAU 2015 B3).
@@ -141,33 +158,32 @@ export default function SkylineV3() {
         </p>
       </header>
 
-      <SiteInputForm onSubmit={build} loading={loading !== null} />
+      <SiteInputForm onSubmit={build} loading={pending.length > 0} />
 
-      {loading && (
+      {pending.length > 0 && (
         <p className="v2-muted" role="status">
-          {loading === 'terrain' ? 'Loading the landing-site terrain, 360° horizon and time sequence…'
-            : 'Computing the time sequence…'}
+          Loading {pending[0] === 'landscape' ? 'landscape' : pending.join(', ')}…
         </p>
       )}
-      {error && <p className="v2-error" role="alert">{error}</p>}
+      {errors.map((error) => <p className="v2-error" role="alert" key={error}>{error}</p>)}
 
-      {terrain && inputs && (
+      {inputs && (terrain || sequence) && (
         <section className="v2-result">
           {sequence && <Timeline result={sequence} step={k} onStep={setStep} />}
-          <div className="v2-tabs" role="tablist" aria-label="View">
+          {terrain && <div className="v2-tabs" role="tablist" aria-label="View">
             {VIEWS.map(([key, label]) => (
               <button key={key} type="button" role="tab" aria-selected={view === key}
                 className={view === key ? 'on' : undefined} onClick={() => setView(key)}>
                 {label}
               </button>
             ))}
-          </div>
-          <LightingControl mode={lightMode} onChange={setLightMode} bodies={bodies} />
-          <div role="tabpanel">
+          </div>}
+          {terrain && <LightingControl mode={lightMode} onChange={setLightMode} bodies={frameKey ? bodies : null} />}
+          {terrain && <div role="tabpanel">
             {view === 'first-person' ? (
               <>
                 <FirstPersonTerrain key={`${inputs.lat},${inputs.lon},${inputs.eyeHeightM}`}
-                  terrain={terrain} bodies={bodies} lighting={lighting} field={field}
+                  terrain={terrain} bodies={bodies} lighting={lighting} field={field} frameKey={frameKey}
                   shadowHeightM={inputs.mastHeightM} />
                 <p className="v2-muted v2-note">
                   {terrain.header.elevation_maps?.length
@@ -177,9 +193,9 @@ export default function SkylineV3() {
               </>
             ) : (
               <>
-                <OverheadTerrain key={`${inputs.lat},${inputs.lon},${inputs.diameterKm}`} terrain={terrain}
+                <OverheadTerrain key={`${inputs.lat},${inputs.lon},${inputs.diameterKm}`} terrain={terrain} frameKey={frameKey}
                   lighting={overheadMode === 'shadows' ? lighting : { mode: 'fixed' }} overlay={overlay} field={field}
-                  bodies={bodies} sunNow={sunNow} intensity={overheadMode === 'intensity'}
+                  bodies={bodies} sunNow={field ? sunNow : null} intensity={overheadMode === 'intensity' && !!field}
                   shadowHeightM={inputs.mastHeightM} />
                 <p className="v2-muted v2-note">
                   The amber line marks the {terrain.header.site.diameter_km} km landing site. The greyed ring around it shows
@@ -187,13 +203,13 @@ export default function SkylineV3() {
                 </p>
               </>
             )}
-          </div>
-          {bodies && <SkyPanel bodies={bodies} terrain={terrain} />}
+          </div>}
+          {terrain && bodies && <SkyPanel bodies={bodies} terrain={terrain} />}
           {sequence && (
             <IlluminationPanel result={sequence} mode={overheadMode} step={k} sunNow={sunNow}
               onMode={(m) => { setOverheadMode(m); setView('overhead') }} />
           )}
-          <TerrainSummary terrain={terrain} inputs={inputs} />
+          {terrain && <TerrainSummary terrain={terrain} inputs={inputs} />}
         </section>
       )}
     </main>
@@ -214,7 +230,7 @@ function LightingControl({ mode, onChange, bodies }) {
           Fixed light (terrain shape only)
         </label>
       </fieldset>
-      {mode === 'sun' && (
+      {mode === 'sun' && bodies && (
         <p className="v2-muted v2-note">
           {bodies ? `Sun ${bodies.sun.elevation_deg.toFixed(2)}° up at azimuth ${bodies.sun.azimuth_deg.toFixed(2)}°. ` : ''}
           Sunlight uses Moon Explorer's lighting model on a uniform grey surface. Shadows are traced on the GPU for

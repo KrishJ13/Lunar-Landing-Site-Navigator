@@ -47,8 +47,14 @@ def correct_outliers(detail, reference, step, pixel_size):
 
 
 class ForegroundSurface:
-    def __init__(self, products, lat, lon):
-        finest = best_product(products, lat, lon)
+    def __init__(self, products, lat, lon, *, fallback=None):
+        try:
+            finest = best_product(products, lat, lon)
+        except LookupError:
+            if fallback is None:
+                raise
+            products = [fallback]
+            finest = best_product(products, lat, lon)
         self.name = finest.name
         self.pixel_size_m = float(finest.pixel_size_m)
         self.step = self.pixel_size_m / 2
@@ -63,6 +69,10 @@ class ForegroundSurface:
         if reference.pixel_size_m > self.pixel_size_m and reference.pixel_size_m <= 4.01 * self.pixel_size_m:
             detail = correct_outliers(detail, reference.heights_m(lat_grid, lon_grid),
                                       self.step, self.pixel_size_m)
+        if fallback is not None and fallback is not finest:
+            missing = ~np.isfinite(detail)
+            if missing.any():
+                detail[missing] = fallback.heights_m(lat_grid[missing], lon_grid[missing])
         self.height = detail
         north_slope, east_slope = np.gradient(detail, self.step)
         self.east = -east_slope

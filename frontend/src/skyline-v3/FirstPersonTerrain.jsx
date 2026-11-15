@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import CompassStrip from '../components/CompassStrip.jsx'
 import { angleDiff, compassName, elevationStep, makeViewScale, wrap360 } from '../lib/view.js'
 import { BODY_STYLE, skylineAt, visibleFraction, visibilityNote } from './bodies.js'
@@ -24,14 +25,15 @@ const clampPitch = (pitch, minPitch) => Math.max(minPitch, Math.min(MAX_PITCH, p
  * grids for GPU shadows: with the real Sun, every visible ground point gets the
  * fraction of the Sun's disc it sees (shadowField.js), baked once per time step.
  */
-export default function FirstPersonTerrain({ terrain, bodies = null, lighting = { mode: 'fixed' }, field = null, shadowHeightM = 0.5,
+export default function FirstPersonTerrain({ terrain, bodies = null, lighting = { mode: 'fixed' }, field = null, shadowHeightM = 0.5, frameKey,
   height = 440 }) {
   const wrapRef = useRef(null)
   const skyRef = useRef(null)
   const skyRendererRef = useRef(null)
   const glRef = useRef(null)
   const overlayRef = useRef(null)
-  const width = useWidth(wrapRef)
+  const measuredWidth = useWidth(wrapRef)
+  const width = measuredWidth ?? 800
   const [heading, setHeading] = useState(INITIAL_HEADING)
   const [pitch, setPitch] = useState(() => {
     const index = Math.round(INITIAL_HEADING / terrain.header.skyline.azimuth_step_deg)
@@ -45,6 +47,8 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
   const drag = useRef(null)
   const rendererRef = useRef(null)
   const [error, setError] = useState(null)
+  const [drawnFrame, setDrawnFrame] = useState(null)
+  const reveal = frameKey !== null && drawnFrame === frameKey && !error
 
   useEffect(() => {
     const canvas = glRef.current
@@ -92,16 +96,26 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
   )
 
   useEffect(() => {
-    const dpr = sizeCanvas(glRef.current, width, viewHeight)
-    sizeCanvas(skyRef.current, width, viewHeight)
-    sizeCanvas(overlayRef.current, width, viewHeight)
+    if (!frameKey || measuredWidth === null || error) return
     const frame = requestAnimationFrame(() => {
-      skyRendererRef.current?.render({ heading, pitch: viewPitch, pxPerDeg: width / fov, dpr, bodies, visibility })
-      rendererRef.current?.draw({ heading, pitch: viewPitch, fov, width, height: viewHeight, lighting })
-      drawOverlay(overlayRef.current.getContext('2d'), scale, dpr, terrain, bodies, visibility, !skyRendererRef.current)
+      const renderer = rendererRef.current
+      if (!renderer) return
+      try {
+        const dpr = sizeCanvas(glRef.current, width, viewHeight)
+        sizeCanvas(skyRef.current, width, viewHeight)
+        sizeCanvas(overlayRef.current, width, viewHeight)
+        skyRendererRef.current?.render({ heading, pitch: viewPitch, pxPerDeg: width / fov, dpr, bodies, visibility })
+        renderer.draw({ heading, pitch: viewPitch, fov, width, height: viewHeight, lighting })
+        drawOverlay(overlayRef.current.getContext('2d'), scale, dpr, terrain, bodies, visibility, !skyRendererRef.current)
+        // Reveal during the drawing callback, before the browser presents the frame.
+        if (drawnFrame !== frameKey) flushSync(() => setDrawnFrame(frameKey))
+      } catch (err) {
+        setError(err.message)
+      }
     })
     return () => cancelAnimationFrame(frame)
-  }, [scale, heading, viewPitch, fov, width, viewHeight, terrain, bodies, visibility, lighting, field])
+  }, [frameKey, drawnFrame, measuredWidth, error, scale, heading, viewPitch, fov, width, viewHeight,
+    terrain, bodies, visibility, lighting, field])
 
   const tilt = (deg) => setPitch((p) => clampPitch(clampPitch(p, minPitch) + deg, minPitch))
 
@@ -132,7 +146,8 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
 
   return (
     <div className="v2-fp">
-      <div className="v2-canvas-wrap" ref={wrapRef} tabIndex={0} onKeyDown={onKeyDown}>
+      <div className="v2-canvas-wrap" ref={wrapRef} style={{ visibility: reveal ? 'visible' : 'hidden' }}
+        tabIndex={0} onKeyDown={onKeyDown}>
         <CompassStrip heading={heading} fov={fov} />
         <div className="v2-stack" style={{ height: viewHeight }}>
           <canvas ref={skyRef} className="v2-sky-canvas" style={{ width, height: viewHeight }} aria-hidden="true" />

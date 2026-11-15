@@ -549,10 +549,13 @@ class LazyRemoteProduct:
 
     def _nominal(self, lat):
         lat = np.asarray(lat, dtype=float)
+        # A round trip through Cartesian coordinates can move an exact boundary
+        # by a few ulps. The actual raster still checks its pixel bounds.
+        epsilon = 1e-10
         if self.spec.south is None:
-            return np.abs(lat) <= self.spec.max_abs_lat
+            return np.abs(lat) <= self.spec.max_abs_lat + epsilon
         hemi = lat < 0 if self.spec.south else lat > 0
-        return hemi & (np.abs(lat) >= self.spec.min_abs_lat)
+        return hemi & (np.abs(lat) >= self.spec.min_abs_lat - epsilon)
 
     def contains(self, lat, lon):
         near = self._nominal(lat)

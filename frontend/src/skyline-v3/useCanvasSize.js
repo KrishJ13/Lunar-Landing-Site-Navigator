@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
 /** Width (CSS px) of the element in `ref`, kept up to date. */
-export function useWidth(ref, initial = 800) {
-  const [width, setWidth] = useState(initial)
+export function useWidth(ref) {
+  const [width, setWidth] = useState(null)
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => setWidth(Math.max(200, Math.floor(entry.contentRect.width))))
     observer.observe(ref.current)
