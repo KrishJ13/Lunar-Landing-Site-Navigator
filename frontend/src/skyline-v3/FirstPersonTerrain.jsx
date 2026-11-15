@@ -182,11 +182,11 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
           {minPitch > 0 ? 'Reset tilt' : 'Level view'}
         </button>
         {bodies && Object.entries(BODY_STYLE).map(([key, { label }]) => (
-          <button key={key} type="button" onClick={() => {
+          <button key={key} type="button" className={`sk-find sk-tone-${key}`} onClick={() => {
             setHeading(wrap360(bodies[key].azimuth_deg))
             setPitch(clampPitch(bodies[key].elevation_deg, minPitch))
           }}>
-            Look at {label}
+            Find {label}
           </button>
         ))}
         <span className="v2-muted">Pitch {viewPitch.toFixed(1)}° · drag or arrow keys (Shift = 1°)</span>

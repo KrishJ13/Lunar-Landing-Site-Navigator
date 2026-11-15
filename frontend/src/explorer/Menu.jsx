@@ -6,10 +6,11 @@ function Menu() {
     <main className="moon-menu">
       <div className="moon-menu-inner">
         <header>
-          <h1>Lunar Landing Site Navigator</h1>
+          <h1>Project pages</h1>
+          <p className="moon-menu-lead"><a href="./">← Back to the site planner</a></p>
         </header>
         <nav aria-label="Lunar tools">
-          <a className="moon-menu-card moon-menu-explorer" href="./moon.html">
+          <a className="moon-menu-card moon-menu-explorer" href="./">
             <div className="moon-menu-art" style={{ '--moon-map': `url("${MAP_DIRECTORY}moon.webp")` }} />
             <div className="moon-menu-card-text">
               <h2>Moon Explorer <span aria-hidden="true">↗</span></h2>
@@ -24,14 +25,14 @@ function Menu() {
           </a>
           <a className="moon-menu-card moon-menu-skyline" href="./skyline-v2.html">
             <div className="moon-menu-card-text">
-              <h2>Lunar Skyline V2 <span aria-hidden="true">↗</span></h2>
-              <p>Developer preview of a landing site's terrain, elevation, and local horizon.</p>
+              <h2>Skyline V2 (archive) <span aria-hidden="true">↗</span></h2>
+              <p>Earlier terrain, elevation and local-horizon view.</p>
             </div>
           </a>
           <a className="moon-menu-card moon-menu-skyline" href="./skyline-v3.html">
             <div className="moon-menu-card-text">
-              <h2>Lunar Skyline V3 <span aria-hidden="true">↗</span></h2>
-              <p>Developer preview with terrain shadows across the whole view, through time.</p>
+              <h2>Skyline View (V4) <span aria-hidden="true">↗</span></h2>
+              <p>The landing-site view: terrain shadows, Sun and Earth through time, and site comparison.</p>
             </div>
           </a>
         </nav>
