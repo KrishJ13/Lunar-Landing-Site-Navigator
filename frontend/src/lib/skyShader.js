@@ -120,6 +120,40 @@ float fbm(vec3 p) {
 }
 
 // --- Sun ---------------------------------------------------------------------
+#ifdef SURFACE_EXPOSURE
+// Quadratic photospheric limb darkening, approximate visible-light coefficients at 550 nm
+// (u1 = 0.47, u2 = 0.23; DOI 10.1093/pasj/psac039). Integrate near the
+// edge across the pixel so the apparent size stays stable at wide fields of view.
+float photosphere(vec2 px, float radius) {
+  float q = dot(px, px) / max(radius * radius, 1e-8);
+  if (q >= 1.0) return 0.0;
+  float oneMinusMu = 1.0 - sqrt(1.0 - q);
+  return 1.0 - oneMinusMu * (0.47 + 0.23 * oneMinusMu);
+}
+
+vec3 sun(float az, float el) {
+  vec2 px = vec2(wrapDiff(az, u_sun.x), el - u_sun.y) * u_ppd;
+  float rho = length(px);
+  float radius = u_sun.z * u_ppd;
+  float disc = 0.0;
+  if (rho < radius - 1.0) {
+    disc = photosphere(px, radius);
+  } else if (rho < radius + 1.0) {
+    for (int y = 0; y < 4; y++) {
+      for (int x = 0; x < 4; x++) {
+        vec2 offset = (vec2(float(x), float(y)) + 0.5) / 4.0 - 0.5;
+        disc += photosphere(px + offset, radius);
+      }
+    }
+    disc /= 16.0;
+  }
+  // A small camera glare cue. The lunar sky itself stays black.
+  float spread = 2.0 * u_dpr + 0.06 * radius;
+  float edge = max(rho - radius, 0.0) / spread;
+  float glare = 0.035 * exp(-0.5 * edge * edge) * u_sunVis;
+  return vec3(1.0, 0.99, 0.97) * (2.1 * disc + glare);
+}
+#else
 // Disc: linear limb darkening I(mu) = 1 - u (1 - mu), u = 0.6 (visible light),
 // mu = sqrt(1 - (rho/r)^2). Glow: an artistic lens bloom (there is no air to
 // scatter light on the Moon), scaled by the disc's visible fraction so a Sun
@@ -148,6 +182,7 @@ vec3 sun(float az, float el) {
   c += vec3(1.0, 0.92, 0.80) * (halo + rays) * u_sunVis;
   return c;
 }
+#endif
 
 // --- Earth -------------------------------------------------------------------
 // Lit by the true Sun direction (u_earthLight = normalize(S - E)), so the phase
@@ -198,16 +233,26 @@ void main() {
   float el = u_pitch + (p.y - 0.5 * u_res.y) / u_ppd;
 
   vec3 sky = vec3(0.0);
+#ifdef SURFACE_EXPOSURE
+  if (u_starGain > 0.001) {
+    sky = starLayer(az, el, 3.0, 0.36, u_starGain, 1);
+  }
+#else
   sky += starLayer(az, el, 1.3, 0.5, 2.2, 1);
   sky += starLayer(az, el, 0.5, 0.35, 0.45, 2);
   sky *= u_starGain;
+#endif
 
   vec3 col = sky;
   if (u_hasBodies == 1) {
     vec4 e = earth(az, el);
     // On the disc: cover the stars. Outside it: e.rgb is the faint rim glow, added.
     col = e.a > 0.0 ? mix(col, e.rgb, e.a) : col + e.rgb;
+#ifdef SURFACE_EXPOSURE
+    col += sun(az, el) * (1.0 - e.a);
+#else
     col += sun(az, el);
+#endif
   }
   // filmic-ish tone map, then gamma
   col = 1.0 - exp(-col);
@@ -265,12 +310,13 @@ export function earthToSun(sun, earth) {
   return d.map((v) => v / n)
 }
 
-export function createSkyRenderer(canvas) {
+export function createSkyRenderer(canvas, { surfaceExposure = false } = {}) {
   const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false })
   if (!gl) return null
   const prog = gl.createProgram()
   gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT))
-  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG))
+  const fragment = surfaceExposure ? FRAG.replace('\n', '\n#define SURFACE_EXPOSURE\n') : FRAG
+  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, fragment))
   gl.linkProgram(prog)
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(`Sky shader failed to link: ${gl.getProgramInfoLog(prog)}`)
   const loc = Object.fromEntries(UNIFORMS.map((n) => [n, gl.getUniformLocation(prog, n)]))
@@ -301,9 +347,11 @@ export function createSkyRenderer(canvas) {
     gl.uniform1f(loc.u_pitch, pitch)
     gl.uniform1f(loc.u_ppd, pxPerDeg * dpr)
     const sunVis = bodies ? visibility?.sun ?? 1 : 0
-    // Exposure: stars fade to 30 % while any of the Sun is above the skyline
-    // (a camera exposed for the sunlit ground would show almost none).
-    gl.uniform1f(loc.u_starGain, 1 - 0.7 * Math.min(sunVis * 4, 1))
+    const directSun = Math.min(sunVis * 4, 1)
+    // A daylight exposure suppresses stars. Solar elevation also covers a
+    // nearby ridge hiding the Sun while the terrain around the observer is lit.
+    const daylight = bodies ? Math.max(directSun, Math.max(0, Math.min(1, (bodies.sun.elevation_deg + 0.5) / 2))) : 0
+    gl.uniform1f(loc.u_starGain, surfaceExposure ? 0.1 * (1 - daylight) ** 4 : 1 - 0.7 * directSun)
     gl.uniform1i(loc.u_hasBodies, bodies ? 1 : 0)
     if (bodies) {
       const { sun, earth } = bodies

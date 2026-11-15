@@ -24,8 +24,8 @@ uniform vec3 sun;
 uniform vec3 shadowEarth;
 uniform vec3 earth;
 uniform bool showCoverage;
-uniform vec3 selectedPoint;
-uniform float selectionDiameterKm;
+uniform vec3 selectedPoints[2];
+uniform vec2 selectionDiametersKm;
 uniform sampler2D albedo;
 uniform highp sampler2DArray trekAtlas;
 uniform highp isampler2D trekIndex;
@@ -153,6 +153,15 @@ float eclipse(vec3 point, vec3 light, float sunRadius) {
   return clamp(1.0 - overlap / PI, 0.0, 1.0);
 }
 
+float siteRing(vec3 point, vec3 centre, float diameter) {
+  float distance = length(point - centre);
+  // At the limb derivatives can include a neighbouring ray that missed the sphere.
+  float edge = clamp(fwidth(distance), 1e-7, 3.0 / disc);
+  float radius = 2.0 * sin(diameter / (4.0 * RADIUS));
+  return step(0.5, dot(centre, centre))
+    * (1.0 - smoothstep(0.45, 1.3, abs(distance - radius) / edge));
+}
+
 void main() {
   vec2 offset = (gl_FragCoord.xy - resolution * 0.5) / disc;
   float r2 = dot(offset, offset);
@@ -166,10 +175,8 @@ void main() {
   // The union of the same three regions used by pointer picking.
   float coverage = max(max(p.x, dot(p, earth)), abs(p.z) - polarLimit);
   float coverageEdge = max(1e-7, fwidth(coverage));
-  float selectionDistance = length(p - selectedPoint);
-  // At the limb derivatives can sample a neighbouring ray that missed the
-  // sphere. Bound the filter width so that jump cannot paint a distant rim.
-  float selectionEdge = clamp(fwidth(selectionDistance), 1e-7, 3.0 / disc);
+  float firstSite = siteRing(p, selectedPoints[0], selectionDiametersKm.x);
+  float secondSite = siteRing(p, selectedPoints[1], selectionDiametersKm.y);
   if (r2 > 1.0) {
     color = vec4(0.0);
     return;
@@ -210,12 +217,8 @@ void main() {
     float boundary = 1.0 - smoothstep(0.0, 1.4 * coverageEdge, coverage);
     image = mix(image, tint, mix(0.22, 0.83, boundary));
   }
-  if (dot(selectedPoint, selectedPoint) > 0.5) {
-    // Chord distance is stable for a small geodesic circle on the unit sphere.
-    float radius = 2.0 * sin(selectionDiameterKm / (4.0 * RADIUS));
-    float ring = 1.0 - smoothstep(0.45, 1.3, abs(selectionDistance - radius) / selectionEdge);
-    image = mix(image, vec3(1.0, 0.84, 0.42), ring);
-  }
+  image = mix(image, vec3(1.0, 0.84, 0.42), firstSite);
+  image = mix(image, vec3(0.52, 0.91, 0.68), secondSite);
   color = vec4(image, 1.0);
 }
 `
@@ -324,7 +327,8 @@ export async function loadGlobe(canvas, signal, requestRedraw) {
     gl.uniform1i(uniform('trekAtlas'), 4)
     gl.uniform1i(uniform('trekIndex'), 5)
     const uniforms = Object.fromEntries(
-      ['resolution', 'disc', 'distanceToCamera', 'camera', 'sun', 'shadowEarth', 'trekLevels', 'earth', 'showCoverage', 'selectedPoint', 'selectionDiameterKm'].map((name) => [name, uniform(name)]),
+      ['resolution', 'disc', 'distanceToCamera', 'camera', 'sun', 'shadowEarth', 'trekLevels', 'earth',
+        'showCoverage', 'selectedPoints[0]', 'selectionDiametersKm'].map((name) => [name, uniform(name)]),
     )
 
     let detailRequest
@@ -334,7 +338,7 @@ export async function loadGlobe(canvas, signal, requestRedraw) {
         detailRequest ??= upload('moon-8k', 0, true)
         return detailRequest
       },
-      draw(geometry, ephemeris, zoom, showCoverage, selectedPoint, diameterKm) {
+      draw(geometry, ephemeris, zoom, showCoverage, sites) {
         const scale = Math.min(window.devicePixelRatio || 1, 1.5)
         const width = Math.max(1, Math.round(canvas.clientWidth * scale))
         const height = Math.max(1, Math.round(canvas.clientHeight * scale))
@@ -353,8 +357,8 @@ export async function loadGlobe(canvas, signal, requestRedraw) {
         gl.uniform3fv(uniforms.shadowEarth, ephemeris.shadow_earth_km)
         gl.uniform3fv(uniforms.earth, geometry.earth)
         gl.uniform1i(uniforms.showCoverage, showCoverage)
-        gl.uniform3fv(uniforms.selectedPoint, selectedPoint ?? [0, 0, 0])
-        gl.uniform1f(uniforms.selectionDiameterKm, diameterKm)
+        gl.uniform3fv(uniforms['selectedPoints[0]'], sites.flatMap((site) => site?.point ?? [0, 0, 0]))
+        gl.uniform2fv(uniforms.selectionDiametersKm, sites.map((site) => site?.diameterKm ?? 0))
         gl.drawArrays(gl.TRIANGLES, 0, 3)
       },
       cleanup,

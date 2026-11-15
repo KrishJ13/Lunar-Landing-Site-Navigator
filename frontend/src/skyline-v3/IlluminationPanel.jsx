@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import { stepTime } from './sequence.js'
 import { HEAT_COLORS } from './terrainRenderer.js'
 
@@ -19,6 +19,7 @@ export default function IlluminationPanel({ result, mode, onMode, step = 0, sunN
   const stats = useMemo(() => summarise(result), [result])
   const { header } = result
   const count = header.times.count
+  const group = useId()
   return (
     <section className="v2-illum">
       <h2>Sunlight over the period</h2>
@@ -26,12 +27,15 @@ export default function IlluminationPanel({ result, mode, onMode, step = 0, sunN
         <legend>Overhead view shows</legend>
         {MODES.map(([key, label]) => (
           <label key={key}>
-            <input type="radio" name="v2-illum-mode" value={key} checked={mode === key} onChange={() => onMode(key)} />
+            <input type="radio" name={group} value={key} checked={mode === key} onChange={() => onMode(key)} />
             {label}
           </label>
         ))}
       </fieldset>
-      {mode === 'intensity' && sunNow && <IntensityLegend flux={sunNow.solarFlux} />}
+      {mode === 'intensity' && sunNow && <p className="v2-muted v2-note">
+        Intensity uses the visible fraction of the Sun and the angle at which light strikes the slope.
+        A surface facing the unobstructed Sun directly would receive {sunNow.solarFlux.toFixed(1)} W/m².
+      </p>}
       {mode === 'dark' && <DarkLegend periodHours={(count - 1) * header.times.step_minutes / 60} step={step}
         stepMinutes={header.times.step_minutes} />}
       <dl className="v2-summary">
@@ -57,18 +61,14 @@ function cellsInDisc({ arrays }) {
 }
 
 /** Incident sunlight on the local surface: E = S (fraction of the Sun seen) cos(incidence), S = 1361 (1 AU / r)^2. */
-function IntensityLegend({ flux }) {
+export function IntensityLegend({ flux }) {
   return (
     <figure className="v2-elevation-legend">
-      <figcaption>
-        Sunlight reaching the ground at this step, on the local slope: E = S × (part of the Sun seen) × cos(angle of
-        incidence), with S = {flux.toFixed(1)} W/m² (1361 W/m² at 1 AU, scaled by the Sun's distance now). Shadows as drawn.
-      </figcaption>
+      <figcaption>Direct sunlight on the terrain at the selected time</figcaption>
       <div className="v2-elevation-ramp" style={{ background: heatGradient }} aria-hidden="true" />
       <div className="v2-elevation-labels">
         {[0, 0.25, 0.5, 0.75, 1].map((t) => <span key={t}>{Math.round(flux * t * t)} W/m²</span>)}
       </div>
-      <p className="v2-muted v2-note">Square-root colour scale: position along the bar = √(E / S).</p>
     </figure>
   )
 }

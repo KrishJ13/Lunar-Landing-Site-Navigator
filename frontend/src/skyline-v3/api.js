@@ -97,13 +97,14 @@ export function decodeTerrainPayload(buffer) {
  * as fetchSiteTerrain. arrays.lit is (T, ny, nx) uint8 on the shared lattice
  * (backend/lunar/horizon_tiles.py), 255 = whole disc visible.
  */
-export async function fetchIllumination({ lat, lon, diameterKm, mastHeightM, eyeHeightM, startUtc, hours, stepMinutes }, signal) {
+export async function fetchIllumination({ lat, lon, diameterKm, mastHeightM, eyeHeightM, observerElevationM, startUtc, hours, stepMinutes }, signal) {
   const response = await fetch(`${API_BASE}/api/site/illumination`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       lat, lon, diameter_km: diameterKm, mast_height_m: mastHeightM, eye_height_m: eyeHeightM,
-      start_utc: startUtc, hours, step_minutes: stepMinutes,
+      observer_elevation_m: observerElevationM, start_utc: startUtc, hours, step_minutes: stepMinutes,
+      include_mission_sunlight: true,
     }),
     signal,
   })
@@ -116,6 +117,22 @@ export async function fetchIllumination({ lat, lon, diameterKm, mastHeightM, eye
     throw new Error('The backend returned an incomplete illumination result. Restart the updated backend and try again.')
   }
   return { header, arrays }
+}
+
+export async function fetchVisibilityWindows(inputs, terrain, signal) {
+  const response = await fetch(`${API_BASE}/api/site/windows`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lat: inputs.lat, lon: inputs.lon, observer_elevation_m: terrain.header.site.eye_m,
+      start_utc: inputs.timeUtc, hours: inputs.hours,
+      include_next_event: true,
+      skyline_deg: Array.from(terrain.arrays.ray_skyline_deg),
+    }),
+    signal,
+  })
+  if (!response.ok) throw new Error(await errorMessage(response))
+  return response.json()
 }
 
 /**

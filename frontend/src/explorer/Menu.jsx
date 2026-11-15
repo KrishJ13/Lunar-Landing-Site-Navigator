@@ -13,25 +13,7 @@ function Menu() {
             <div className="moon-menu-art" style={{ '--moon-map': `url("${MAP_DIRECTORY}moon.webp")` }} />
             <div className="moon-menu-card-text">
               <h2>Moon Explorer <span aria-hidden="true">↗</span></h2>
-              <p>See the Moon at a specific date and time. Explore the near side and both poles.</p>
-            </div>
-          </a>
-          <a className="moon-menu-card moon-menu-skyline" href={import.meta.env.VITE_LUNAR_SKYLINE_URL || './skyline.html'}>
-            <div className="moon-menu-card-text">
-              <h2>Lunar Skyline <span aria-hidden="true">↗</span></h2>
-              <p>Stand on the lunar surface and compare the terrain and sky at two sites.</p>
-            </div>
-          </a>
-          <a className="moon-menu-card moon-menu-skyline" href="./skyline-v2.html">
-            <div className="moon-menu-card-text">
-              <h2>Lunar Skyline V2 <span aria-hidden="true">↗</span></h2>
-              <p>Developer preview of a landing site's terrain, elevation, and local horizon.</p>
-            </div>
-          </a>
-          <a className="moon-menu-card moon-menu-skyline" href="./skyline-v3.html">
-            <div className="moon-menu-card-text">
-              <h2>Lunar Skyline V3 <span aria-hidden="true">↗</span></h2>
-              <p>Developer preview with terrain shadows across the whole view, through time.</p>
+              <p>Pick landing sites on the Moon and explore or compare them in Skyline V3.</p>
             </div>
           </a>
         </nav>

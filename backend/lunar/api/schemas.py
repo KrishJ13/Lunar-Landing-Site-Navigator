@@ -284,9 +284,23 @@ class IlluminationRequest(BaseModel):
     diameter_km: float = Field(10.0, ge=5, le=50, description="Landing-site diameter, km")
     mast_height_m: float = Field(2.0, ge=0, le=50, description="Height of the evaluated point above the ground, metres")
     eye_height_m: float = Field(1.8, ge=0, le=100, description="Eye height at the site centre for the Sun/Earth angles")
+    observer_elevation_m: float | None = Field(None, ge=-10000, le=20000,
+                                               description="Panorama eye elevation above the lunar reference sphere")
     start_utc: str = Field(..., description="ISO 8601 with explicit UTC (Z or +00:00)")
     hours: float = Field(709.0, gt=0, le=9600, description="Length of the sequence, hours (709 = one synodic month)")
     step_minutes: float = Field(60.0, ge=15, le=360, description="Time step, minutes (15 at the finest)")
+    include_mission_sunlight: bool = False
+
+
+class SiteWindowsRequest(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-360, le=360)
+    observer_elevation_m: float = Field(..., ge=-10000, le=20000)
+    start_utc: str
+    hours: float = Field(..., gt=0, le=9600)
+    include_next_event: bool = False
+    skyline_deg: list[float] = Field(..., min_length=72, max_length=3600,
+                                     description="Equally spaced skyline angles clockwise from north")
 
 
 class ShadowFieldRequest(BaseModel):

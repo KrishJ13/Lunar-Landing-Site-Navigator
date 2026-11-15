@@ -45,7 +45,7 @@ uniform bool u_showElevation;
 uniform vec2 u_elevationRange;
 uniform vec3 u_elevationColors[${ELEVATION_COLORS.length}];
 uniform vec3 u_heatColors[${HEAT_COLORS.length}];
-uniform int u_overlayMode;       // 0 none, 1 terrain shadow (lit fraction), 2 heatmap
+uniform int u_overlayMode;       // 0 none, 1 terrain shadow, 2 heatmap, 3 masked mission heatmap
 uniform sampler2D u_overlay;     // lattice grid nx x ny, 0..1 (sequence.js)
 uniform sampler2D u_fieldSeen;   // fraction of the Sun seen (GPU shadows), square grid over the view
 uniform bool u_hasFieldSeen;
@@ -90,6 +90,9 @@ void main() {
     float shade = dot(n, normalize(vec3(-0.72, 0.6, 0.34)));
     // Square-root colour scale (as heatmaps of skewed quantities): low values stay distinguishable.
     col = heatColor(sqrt(flux / u_solarFlux)) * (0.85 + 0.25 * shade);
+  } else if (u_overlayMode == 3 && !u_dim) {
+    vec2 value = texture(u_overlay, gridUv(v_xy)).rg;
+    col = value.g > 0.0 ? heatColor(value.r / value.g) : vec3(0.35);
   } else if (u_overlayMode == 2 && !u_dim) {  // lattice maps cover the site only
     vec3 light = normalize(vec3(-0.72, 0.6, 0.34));
     float shade = dot(normalize(v_normal), light);
@@ -271,7 +274,9 @@ bool groundPoint(ivec2 texel, out vec2 xy) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, next.nx, next.ny, 0, gl.RED, gl.UNSIGNED_BYTE, next.values)
+    const masked = next.mode === 'mission'
+    gl.texImage2D(gl.TEXTURE_2D, 0, masked ? gl.RG8 : gl.R8, next.nx, next.ny, 0,
+      masked ? gl.RG : gl.RED, gl.UNSIGNED_BYTE, next.values)
   }
 
   function upload(mesh, dim) {
@@ -342,7 +347,7 @@ bool groundPoint(ivec2 texel, out vec2 xy) {
       gl.bindTexture(gl.TEXTURE_2D, shadows.pass.texture)
       gl.uniform1f(loc.u_fieldHalf, shadows.half)
     }
-    const mode = overlay ? ({ shadow: 1, heat: 2 }[overlay.mode] ?? 0) : 0
+    const mode = overlay ? ({ shadow: 1, heat: 2, mission: 3 }[overlay.mode] ?? 0) : 0
     gl.uniform1i(loc.u_overlayMode, mode)
     if (mode) {
       gl.activeTexture(gl.TEXTURE0)

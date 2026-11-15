@@ -1,34 +1,54 @@
 # Moon Explorer
 
-This copy of the project opens on a menu. The globe is at `/moon.html` and the existing
-Lunar Skyline tool is at `/skyline.html`. Set `VITE_LUNAR_SKYLINE_URL` when building the
-frontend to link the menu directly to an existing deployment.
+Select sites in Moon Explorer at `/moon.html`. **Explore** opens a single site and
+**Compare** opens two sites in Skyline V3 at `/skyline-v3.html`. The original
+Skyline and V2 URLs forward to Moon Explorer.
 
-From the repository root, after installing the existing backend dependencies and
-[SPICE kernels](../backend/README.md):
+## Run locally
+
+The [Docker quick start](../README.md#run-with-docker) runs both services with one
+command. For local development with Node.js 24 and Python, use two terminals.
+
+On macOS or Linux, run the backend from the repository root:
 
 ```sh
 cd backend
-python -m uvicorn lunar_skyline.app:app --host 127.0.0.1 --port 8035
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python scripts/download_kernels.py
+.venv/bin/python scripts/fetch_dem.py --tier starter
+.venv/bin/python -m uvicorn lunar_skyline.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-In another terminal, from the repository root:
+Existing checkouts can skip dependency and data setup after the first run.
+For Windows, see the [backend setup guide](../backend/README.md).
+
+In the second terminal, from the repository root:
 
 ```sh
 cd frontend
 npm ci
-LUNAR_API_PROXY=http://127.0.0.1:8035 npm run dev -- --port 5187 --strictPort
+npm run dev -- --port 5173 --strictPort
 ```
 
-Open [the local menu](http://127.0.0.1:5187/). A production server should serve the
+Open [Moon Explorer](http://localhost:5173/moon.html). A production server should serve the
 Vite build output and forward `/api` to FastAPI on the same origin.
+
+## Explore and compare
+
+1. Set the mission start and end in UTC. The globe shows lighting at the mission start.
+2. Select a site by clicking the globe or opening **Enter coordinates**. Set its
+   diameter in the selection card. Open **Settings** to set the playback interval,
+   shadow height, and observer height shared by both sites.
+3. Click **Explore**, or use **Add site to compare**, select another site, and click
+   **Compare**. In Skyline V3, each site has its own date controls and timeline.
+   Use **Moon Explorer** to return to the site selections.
 
 ## Viewing and lighting
 
-The date picker accepts whole UTC dates inside the installed DE440s kernel window
+The date fields accept UTC dates and times inside the installed DE440s kernel window
 (1849-12-27 through 2150-01-21). The globe begins with celestial north up in the apparent
-view from Earth's centre, including light travel time and lunar libration. The
-illumination percentage refers to that Earth-facing geometry even when the camera is tilted.
+view from Earth's centre, including light travel time and lunar libration.
 
 The renderer and pointer picking share a georeferenced sphere. The full sphere is drawn.
 Selection is limited to the near hemisphere, the extra limb visible through natural

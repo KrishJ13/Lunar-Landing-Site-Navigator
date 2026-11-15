@@ -8,14 +8,14 @@ const SPEEDS = [2, 8, 24, 60] // time steps per second
  * buttons. Every view reads the same step, so the Sun, Earth, sky chart,
  * lighting and shadows move together. Nothing is fetched while playing.
  */
-export default function Timeline({ result, step, onStep }) {
+export default function Timeline({ result, step, onStep, tracks, playing, setPlaying }) {
   const { times } = result.header
   const count = times.count
   const last = count - 1
-  const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(8)
+  const [showChart, setShowChart] = useState(false)
   const perDay = Math.max(1, Math.round((24 * 60) / times.step_minutes))
-  const siteLit = useMemo(() => shareSunlit(result), [result])
+  const siteLit = useMemo(() => showChart ? shareSunlit(result) : null, [result, showChart])
 
   useEffect(() => {
     if (!playing) return undefined
@@ -30,29 +30,37 @@ export default function Timeline({ result, step, onStep }) {
   return (
     <section className="v2-timeline" aria-label="Timeline">
       <div className="v2-timeline-head">
+        <span className="v3-selected-label">Selected time</span>
         <strong className="v2-timeline-time">{stepTime(times, step)} UTC</strong>
-        <span className="v2-muted">
-          step {step + 1} of {count} · every {fmtStep(times.step_minutes)} · Sun {sunEl.toFixed(2)}° · Earth {earthEl.toFixed(2)}° ·
-          {' '}{(siteLit[step] * 100).toFixed(1)} % of the site sunlit
-        </span>
       </div>
       <input className="v2-timeline-slider" type="range" min={0} max={last} value={step}
-        aria-label="Time step" aria-valuetext={`${stepTime(times, step)} UTC`}
+        aria-label="Selected time" aria-valuetext={`${stepTime(times, step)} UTC`}
         onChange={(e) => go(Number(e.target.value))} />
-      <SiteChart result={result} siteLit={siteLit} step={step} onPick={go} />
       <div className="v2-controls">
         <button type="button" onClick={() => go(step - perDay)} aria-label="Back one day">« day</button>
         <button type="button" onClick={() => go(step - 1)} aria-label="Back one step">‹ step</button>
         <button type="button" className="v2-play" onClick={() => setPlaying((p) => !p)}>{playing ? 'Pause' : 'Play'}</button>
         <button type="button" onClick={() => go(step + 1)} aria-label="Forward one step">step ›</button>
         <button type="button" onClick={() => go(step + perDay)} aria-label="Forward one day">day »</button>
-        <label>
-          Speed{' '}
-          <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
-            {SPEEDS.map((v) => <option key={v} value={v}>{v} steps/s ({fmtStep(v * times.step_minutes)} per s)</option>)}
-          </select>
-        </label>
       </div>
+      {tracks}
+      <details onToggle={(e) => setShowChart(e.currentTarget.open)}>
+        <summary>Advanced timeline</summary>
+        {siteLit && <>
+          <p className="v2-muted">
+            Frame {step + 1} of {count} · every {fmtStep(times.step_minutes)} · {' '}
+            Sun {sunEl.toFixed(2)}° · Earth {earthEl.toFixed(2)}° · {' '}
+            {(siteLit[step] * 100).toFixed(1)}% mean visible solar disc across the site
+          </p>
+          <SiteChart result={result} siteLit={siteLit} step={step} onPick={go} />
+          <label>
+            Speed{' '}
+            <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
+              {SPEEDS.map((v) => <option key={v} value={v}>{v} steps/s ({fmtStep(v * times.step_minutes)} per s)</option>)}
+            </select>
+          </label>
+        </>}
+      </details>
     </section>
   )
 }

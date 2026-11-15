@@ -1,5 +1,7 @@
-import { useMemo, useRef, useState } from 'react'
-import { SURROUND_KM, fetchIllumination, fetchShadowField, fetchSiteTerrain } from './api.js'
+import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
+import MissionDateFields from '../components/MissionDateFields.jsx'
+import { missionRange, missionUrl, readMissionPlan } from '../lib/missionPlan.js'
+import { SURROUND_KM, fetchIllumination, fetchShadowField, fetchSiteTerrain, fetchVisibilityWindows } from './api.js'
 import FirstPersonTerrain from './FirstPersonTerrain.jsx'
 import IlluminationPanel from './IlluminationPanel.jsx'
 import { enuDirection, sunVisibleBesideEarth } from './lighting.js'
@@ -8,13 +10,14 @@ const SOLAR_CONSTANT = 1361 // W/m^2 at 1 AU (IAU 2015 Resolution B3 nominal tot
 const AU_KM = 149_597_870.7
 import OverheadTerrain from './OverheadTerrain.jsx'
 import { bodiesAt, seenAt } from './sequence.js'
-import SiteInputForm from './SiteInputForm.jsx'
 import SkyPanel from './SkyPanel.jsx'
 import Timeline from './Timeline.jsx'
+import { EarthCommunications, MissionDetails, SelectedTimeDetails, VisibilityTracks } from './SiteOverview.jsx'
+import { buildMissionSunlight } from './missionSunlight.js'
 
 const VIEWS = [
-  ['first-person', 'First-person 360°'],
-  ['overhead', 'Overhead (orbit)'],
+  ['first-person', 'Landscape'],
+  ['overhead', 'Orbital view'],
 ]
 const SECTION_TIMEOUT_MS = 30_000
 
@@ -24,37 +27,75 @@ const sameSequence = (a, b) => sameSite(a, b) && a.timeUtc === b.timeUtc && a.ho
   a.stepMinutes === b.stepMinutes && a.mastHeightM === b.mastHeightM
 
 /**
- * Lunar Skyline V3 (developer page): one landing site at a time.
+ * Each site has its own mission range and playback state.
  *
  * Build loads the terrain (POST /api/site/terrain) and a time sequence
  * (POST /api/site/illumination: Sun, Earth and the fraction of the Sun each
  * point of the site sees, every step). A single timeline step drives the
  * first-person view (WebGL Sun, Earth and stars; sunlight and shadows), the
  * overhead view, the sky chart and the tables. Nothing is fetched while playing.
- * Written as self-contained components so they can later move into Moon Explorer.
  */
 export default function SkylineV3() {
+  const [plan] = useState(() => readMissionPlan(window.location.search))
+  const [firstSiteReady, setFirstSiteReady] = useState(false)
+  const siteDates = useRef(plan.siteDates)
+  const comparing = plan.sites.length === 2
+  const back = plan.sites.length ? missionUrl('moon.html', plan) : './moon.html'
+
+  function updateLink(index, dates) {
+    siteDates.current = siteDates.current.map((value, i) => i === index ? dates : value)
+    const url = missionUrl('skyline-v3.html', { ...plan, siteDates: siteDates.current })
+    window.history.replaceState(window.history.state, '', url)
+  }
+
+  return (
+    <main className={`v2 v3-analysis-page${comparing ? ' v3-is-comparing' : ''}`}>
+      <header className="v2-header">
+        <a href={back} className="v2-back">← Moon Explorer</a>
+        <h1>{comparing ? 'Compare landing sites' : 'Lunar Skyline V3'}</h1>
+      </header>
+      {plan.sites.length
+        ? <div className="v3-analysis-grid">{plan.sites.map((site, index) =>
+          <SiteAnalysis key={index} site={site} siteName={`Site ${index + 1}`} number={index + 1}
+            settings={plan.settings} initialDates={plan.siteDates[index]} enabled={index === 0 || firstSiteReady}
+            onFirstLoadSettled={index === 0 ? () => setFirstSiteReady(true) : undefined}
+            onDatesApplied={(dates) => updateLink(index, dates)} />,
+        )}</div>
+        : <p className="v2-muted">Choose one or two landing sites in Moon Explorer to get started.</p>}
+    </main>
+  )
+}
+
+function SiteAnalysis({ site, siteName, number, settings, initialDates, enabled, onFirstLoadSettled, onDatesApplied }) {
+  const [dates, setDates] = useState(initialDates)
   const [inputs, setInputs] = useState(null)
   const [terrain, setTerrain] = useState(null)
   const [sequence, setSequence] = useState(null)
   const [field, setField] = useState(null)
+  const [windows, setWindows] = useState(null)
   const [step, setStep] = useState(0)
+  const [playing, setPlaying] = useState(false)
   const [errors, setErrors] = useState([])
   const [pending, setPending] = useState([])
   const [view, setView] = useState('first-person')
   const [lightMode, setLightMode] = useState('sun')
   const [overheadMode, setOverheadMode] = useState('shadows')
+  const [advanced, setAdvanced] = useState(false)
   const inFlight = useRef(null)
+  const firstPersonAim = useRef(null)
+  const range = missionRange(dates, settings.stepMinutes)
 
   async function build(next) {
     const reuseSite = sameSite(next, inputs)
-    const reuseSequence = sameSequence(next, inputs) && sequence
     const needsLandscape = !reuseSite || !terrain
+    const reuseSequence = !needsLandscape && sameSequence(next, inputs) && sequence
+    const reuseWindows = !needsLandscape && next.timeUtc === inputs.timeUtc && next.hours === inputs.hours && windows
+    let landscape = needsLandscape ? null : terrain
     const sections = []
     if (needsLandscape) {
       sections.push(['landscape', (signal) => fetchSiteTerrain({
         lat: next.lat, lon: next.lon, diameterKm: next.diameterKm, observerHeightM: next.eyeHeightM,
-      }, signal), setTerrain])
+      }, signal), (data) => { landscape = data; setTerrain(data) }])
     }
     if (!reuseSite || !field) {
       sections.push(['shadows', (signal) => fetchShadowField({
@@ -65,7 +106,11 @@ export default function SkylineV3() {
       sections.push(['sunlight timeline', (signal) => fetchIllumination({
         lat: next.lat, lon: next.lon, diameterKm: next.diameterKm, mastHeightM: next.mastHeightM,
         eyeHeightM: next.eyeHeightM, startUtc: next.timeUtc, hours: next.hours, stepMinutes: next.stepMinutes,
+        observerElevationM: landscape?.header.site.eye_m,
       }, signal), setSequence])
+    }
+    if (!reuseWindows) {
+      sections.push(['visibility windows', (signal) => fetchVisibilityWindows(next, landscape, signal), setWindows])
     }
     if (!sections.length) return
 
@@ -78,7 +123,9 @@ export default function SkylineV3() {
       setField(null)
     }
     if (!reuseSequence) setSequence(null)
+    if (!reuseWindows) setWindows(null)
     setStep(0)
+    setPlaying(false)
     setErrors([])
     setPending(sections.map(([label]) => label))
 
@@ -101,12 +148,52 @@ export default function SkylineV3() {
     }
     // Both views use the landscape response. Give it priority over the lighting requests.
     if (needsLandscape) await loadSection(sections.shift())
-    if (!controller.signal.aborted) sections.forEach(loadSection)
+    if (controller.signal.aborted) return
+    await Promise.all(sections.map((section) => {
+      if (section[0] !== 'visibility windows' || landscape) return loadSection(section)
+      setPending((current) => current.filter((item) => item !== section[0]))
+    }))
+  }
+
+  const initialize = useEffectEvent(async () => {
+    const initialRange = missionRange(initialDates, settings.stepMinutes)
+    if (!initialRange.error) await build({ ...site, ...settings, ...initialRange, siteName })
+  })
+  const finishInitialLoad = useEffectEvent(() => onFirstLoadSettled?.())
+  useEffect(() => {
+    if (!enabled) return
+    let active = true
+    // Skip the development StrictMode rehearsal before starting expensive requests.
+    queueMicrotask(async () => {
+      if (!active) return
+      try {
+        await initialize()
+      } finally {
+        if (active) finishInitialLoad()
+      }
+    })
+    return () => {
+      active = false
+      const controller = inFlight.current
+      inFlight.current = null
+      controller?.abort()
+    }
+  }, [enabled])
+
+  function applyDates(event) {
+    event.preventDefault()
+    if (range.error) return
+    onDatesApplied(dates)
+    void build({ ...site, ...settings, ...range, siteName })
   }
 
   const k = sequence ? Math.min(step, sequence.header.times.count - 1) : 0
+  const frameSeconds = sequence ? sequence.header.times.step_minutes * 60 : 0
+  const elapsed = k * frameSeconds
   const bodies = useMemo(() => (sequence ? bodiesAt(sequence, k) : null), [sequence, k])
   const frameKey = terrain && field && bodies ? inputs : null
+  const missionLayers = useMemo(() => (sequence ? buildMissionSunlight(sequence) : null), [sequence])
+  const missionLayer = missionLayers?.[overheadMode]
   const seen = useMemo(() => (sequence ? seenAt(sequence, k) : null), [sequence, k])
   const lighting = useMemo(() => {
     if (lightMode !== 'sun' || !bodies || !field) return { mode: 'fixed' }
@@ -132,7 +219,9 @@ export default function SkylineV3() {
   }, [bodies])
 
   // Steps each lattice point has been dark (< 0.1 % of the Sun visible) up to step k.
-  const darkRuns = useMemo(() => (sequence ? darkRunLengths(sequence) : null), [sequence])
+  const darkRuns = useMemo(() => (
+    sequence && overheadMode === 'dark' ? darkRunLengths(sequence) : null
+  ), [sequence, overheadMode])
 
   // The overhead map at the step: shadows (the lighting), incident sunlight (W/m^2,
   // drawn on the GPU from the same shadows), or how long each point has been dark.
@@ -149,16 +238,17 @@ export default function SkylineV3() {
   }, [sequence, overheadMode, seen, darkRuns, k])
 
   return (
-    <main className="v2">
-      <header className="v2-header">
-        <a href="./" className="v2-back">← Menu</a>
-        <h1>Lunar Skyline V3 <span className="v2-badge">developer</span></h1>
-        <p className="v2-muted">
-          Explore the landing site from ground level, and play the Sun, Earth, sunlight and shadows through time.
-        </p>
+    <section className="v3-analysis-site" data-site={number} aria-label={siteName}>
+      <header className="v3-analysis-site-heading">
+        <h2>{siteName}</h2>
+        <p className="v2-muted">{site.lat.toFixed(4)}° lat, {site.lon.toFixed(4)}° lon east · {site.diameterKm} km across</p>
       </header>
-
-      <SiteInputForm onSubmit={build} loading={pending.length > 0} />
+      <form className="v2-form v3-mission-date-form" onSubmit={applyDates}>
+        <MissionDateFields dates={dates} onChange={setDates} />
+        <button type="submit" disabled={!enabled || !!range.error || pending.length > 0}>Update dates</button>
+        {range.error && <p className="v2-error v2-wide" role="alert">{range.error}</p>}
+      </form>
+      {!enabled && <p className="v2-muted" role="status">Waiting for Site 1 to load.</p>}
 
       {pending.length > 0 && (
         <p className="v2-muted" role="status">
@@ -169,7 +259,17 @@ export default function SkylineV3() {
 
       {inputs && (terrain || sequence) && (
         <section className="v2-result">
-          {sequence && <Timeline result={sequence} step={k} onStep={setStep} />}
+          <MissionDetails inputs={inputs} terrain={terrain} windows={windows}
+            loading={pending.includes('visibility windows')} />
+          <SelectedTimeDetails inputs={inputs} bodies={bodies} windows={windows} elapsed={elapsed}
+            loading={pending.includes('visibility windows')} />
+          {windows && <EarthCommunications windows={windows} elapsed={elapsed} bodies={bodies} terrain={terrain}
+            frameSeconds={frameSeconds} lastFrame={(sequence?.header.times.count ?? 0) - 1}
+            onSelectFrame={(frame) => {
+              setPlaying(false)
+              setStep(frame)
+              firstPersonAim.current?.(bodiesAt(sequence, frame).earth)
+            }} />}
           {terrain && <div className="v2-tabs" role="tablist" aria-label="View">
             {VIEWS.map(([key, label]) => (
               <button key={key} type="button" role="tab" aria-selected={view === key}
@@ -178,55 +278,86 @@ export default function SkylineV3() {
               </button>
             ))}
           </div>}
-          {terrain && <LightingControl mode={lightMode} onChange={setLightMode} bodies={frameKey ? bodies : null} />}
           {terrain && <div role="tabpanel">
             {view === 'first-person' ? (
               <>
                 <FirstPersonTerrain key={`${inputs.lat},${inputs.lon},${inputs.eyeHeightM}`}
                   terrain={terrain} bodies={bodies} lighting={lighting} field={field} frameKey={frameKey}
-                  shadowHeightM={inputs.mastHeightM} />
+                  shadowHeightM={inputs.mastHeightM} aimRef={firstPersonAim} />
+                {/* Legacy in-view elevation sources:
                 <p className="v2-muted v2-note">
                   {terrain.header.elevation_maps?.length
                     ? `Elevation maps near to far · ${terrain.header.elevation_maps.join(' → ')}`
                     : 'LOLA LDEM_128 for the full view · 128 pixels per degree'}
-                </p>
+                </p> */}
               </>
             ) : (
               <>
-                <OverheadTerrain key={`${inputs.lat},${inputs.lon},${inputs.diameterKm}`} terrain={terrain} frameKey={frameKey}
-                  lighting={overheadMode === 'shadows' ? lighting : { mode: 'fixed' }} overlay={overlay} field={field}
-                  bodies={bodies} sunNow={field ? sunNow : null} intensity={overheadMode === 'intensity' && !!field}
+                <div className="v2-tabs v3-orbit-layers" role="group" aria-label="Orbital map layer">
+                  <button type="button" aria-pressed={overheadMode === 'shadows'}
+                    onClick={() => setOverheadMode('shadows')}>Shadows at selected time</button>
+                  <button type="button" disabled={!frameKey} aria-pressed={overheadMode === 'intensity'}
+                    onClick={() => setOverheadMode('intensity')}>Solar intensity at selected time</button>
+                  {/* <button type="button" disabled={!missionLayers?.mission} aria-pressed={overheadMode === 'mission'}
+                    onClick={() => setOverheadMode('mission')}>Mission sunlight</button> */}
+                  <button type="button" disabled={!missionLayers?.energy} aria-pressed={overheadMode === 'energy'}
+                    onClick={() => setOverheadMode('energy')}>Solar energy received</button>
+                </div>
+                <OverheadTerrain key={`${inputs.lat},${inputs.lon},${inputs.diameterKm}`} terrain={terrain}
+                  frameKey={missionLayer ?? frameKey}
+                  lighting={overheadMode === 'shadows' ? lighting : { mode: 'fixed' }}
+                  overlay={missionLayer?.overlay ?? overlay}
+                  field={missionLayer ? null : field} bodies={missionLayer ? null : bodies}
+                  sunNow={field && !missionLayer ? sunNow : null} intensity={overheadMode === 'intensity' && !!field}
+                  missionLayer={missionLayer}
                   shadowHeightM={inputs.mastHeightM} />
                 <p className="v2-muted v2-note">
-                  The amber line marks the {terrain.header.site.diameter_km} km landing site. The greyed ring around it shows
-                  the terrain {SURROUND_KM} km further out, with the same shadows, for context.
+                  Amber outline · {terrain.header.site.diameter_km} km landing area
+                  {' · '}{SURROUND_KM} km of surrounding terrain
                 </p>
               </>
             )}
           </div>}
-          {terrain && bodies && <SkyPanel bodies={bodies} terrain={terrain} />}
-          {sequence && (
-            <IlluminationPanel result={sequence} mode={overheadMode} step={k} sunNow={sunNow}
-              onMode={(m) => { setOverheadMode(m); setView('overhead') }} />
-          )}
-          {terrain && <TerrainSummary terrain={terrain} inputs={inputs} />}
+          {sequence && <Timeline result={sequence} step={k} onStep={setStep}
+            playing={playing} setPlaying={setPlaying}
+            tracks={windows && <VisibilityTracks windows={windows} elapsed={elapsed} />} />}
+          <details className="v3-advanced" open={advanced} onToggle={(e) => setAdvanced(e.currentTarget.open)}>
+            <summary>Advanced details</summary>
+            {advanced && <>
+              {windows && <p className="v2-muted v2-note">
+                Visibility is calculated against the terrain horizon every {windows.cadence_s / 60} minutes before refining
+                crossings. Short windows may be missed. Sunlight means part of the Sun is above terrain. Earth visibility uses
+                its centre. These estimates exclude eclipses and radio link performance.
+              </p>}
+              {terrain && <LightingControl mode={lightMode} onChange={setLightMode} bodies={frameKey ? bodies : null} />}
+              {terrain && bodies && <SkyPanel bodies={bodies} terrain={terrain} />}
+              {sequence && (
+                <IlluminationPanel result={sequence} mode={overheadMode} step={k} sunNow={sunNow}
+                  onMode={(m) => { setOverheadMode(m); setView('overhead') }} />
+              )}
+              {terrain && <TerrainSummary terrain={terrain} inputs={inputs} />}
+              {!!terrain?.header.elevation_maps?.length &&
+                <p className="v2-muted v2-note">Elevation maps near to far · {terrain.header.elevation_maps.join(' → ')}</p>}
+            </>}
+          </details>
         </section>
       )}
-    </main>
+    </section>
   )
 }
 
 function LightingControl({ mode, onChange, bodies }) {
+  const group = useId()
   return (
     <div className="v2-lighting">
       <fieldset>
         <legend>Lighting</legend>
         <label>
-          <input type="radio" name="v2-lighting" value="sun" checked={mode === 'sun'} onChange={() => onChange('sun')} />
+          <input type="radio" name={group} value="sun" checked={mode === 'sun'} onChange={() => onChange('sun')} />
           Sun at the timeline step
         </label>
         <label>
-          <input type="radio" name="v2-lighting" value="fixed" checked={mode === 'fixed'} onChange={() => onChange('fixed')} />
+          <input type="radio" name={group} value="fixed" checked={mode === 'fixed'} onChange={() => onChange('fixed')} />
           Fixed light (terrain shape only)
         </label>
       </fieldset>

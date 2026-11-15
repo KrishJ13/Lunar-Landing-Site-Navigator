@@ -1,5 +1,8 @@
 # Local horizon: handover
 
+Historical handover for the original Skyline frontend. For the current Moon Explorer
+and Skyline V3 workflow, see the [app guide](moon_explorer.md).
+
 Handover for whoever picks this up next (human or Claude). It covers what the
 `feature/local_horizon` work does, how to run it, how it works, the decisions
 the team has made, and what comes next.

@@ -4,16 +4,13 @@ import {
   pickSurface, projectSurface, scaleBar, surfaceNormal, zoomLimit, zoomToward,
 } from './geometry.js'
 import { loadGlobe } from './globeShader.js'
+import MissionDateFields from '../components/MissionDateFields.jsx'
+import { MAX_DIAMETER_KM, MIN_DIAMETER_KM, PLAYBACK_INTERVALS, isMissionTime,
+  missionRange, missionUrl, readMissionPlan, saveMissionSettings } from '../lib/missionPlan.js'
 import './explorer.css'
 
 const INITIAL_VIEW = { zoom: 1 }
-const MIN_DIAMETER_KM = 5
-const MAX_DIAMETER_KM = 50
-const TIMES = Array.from({ length: 96 }, (_, index) =>
-  `${String(Math.floor(index / 4)).padStart(2, '0')}:${String(index % 4 * 15).padStart(2, '0')}`,
-)
-const MIN_DATE = '1849-12-27'
-const MAX_DATE = '2150-01-21'
+const SITE_NUMBERS = [1, 2]
 
 function coordinateText(normal) {
   const { lat, lon } = coordinates(normal)
@@ -45,16 +42,20 @@ function useEphemeris(timestamp) {
 }
 
 function MoonExplorer() {
-  const [initial] = useState(() => new Date(Math.floor(Date.now() / 900000) * 900000).toISOString())
-  const [date, setDate] = useState(initial.slice(0, 10))
-  const [time, setTime] = useState(initial.slice(11, 16))
+  const [initial] = useState(() => readMissionPlan(window.location.search))
+  const [dates, setDates] = useState(initial.dates)
+  const [settings, setSettings] = useState(initial.settings)
   const [orbit, setOrbit] = useState(INITIAL_VIEW)
   const [renderer, setRenderer] = useState(null)
   const [error, setError] = useState('')
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [hover, setHover] = useState(null)
-  const [selected, setSelected] = useState(null)
-  const [diameterKm, setDiameterKm] = useState(SELECTION_DIAMETER_KM)
+  const [sites, setSites] = useState(() => [0, 1].map((index) => {
+    const site = initial.sites[index]
+    return site ? { point: surfaceNormal(site.lat, site.lon), diameterKm: site.diameterKm } : null
+  }))
+  const [activeSlot, setActiveSlot] = useState(0)
+  const [selectionNotice, setSelectionNotice] = useState('')
   const [dragging, setDragging] = useState(false)
   const [showCoverage, setShowCoverage] = useState(false)
   const [query, setQuery] = useState('')
@@ -63,8 +64,9 @@ function MoonExplorer() {
   const drag = useRef(null)
   const redraw = useRef(null)
 
-  const dateValid = Boolean(date && date >= MIN_DATE && date <= MAX_DATE)
-  const requestTime = `${dateValid ? date : initial.slice(0, 10)}T${time}:00Z`
+  const dateValid = isMissionTime(dates.start)
+  const requestTime = `${dateValid ? dates.start : initial.dates.start}:00Z`
+  const range = missionRange(dates, settings.stepMinutes)
   const response = useEphemeris(requestTime)
   const ephemeris = dateValid ? response?.data : null
   const camera = useMemo(() => ephemeris && cameraFor(ephemeris, orbit), [ephemeris, orbit])
@@ -73,8 +75,11 @@ function MoonExplorer() {
   const zoom = Math.min(maxZoom, orbit.zoom)
   const ready = Boolean(camera && renderer && hasSize && !error)
   const scale = camera && hasSize && scaleBar(size.width, size.height, zoom, camera)
-  const activeSelection = camera && selected && isMapped(selected, camera.earth) ? selected : null
-  const pin = ready && activeSelection && projectSurface(activeSelection, size.width, size.height, zoom, camera)
+  const mappedSites = useMemo(() => sites.map((site) =>
+    site && camera && isMapped(site.point, camera.earth) ? site : null), [sites, camera])
+  const pins = mappedSites.map((site) => ready && site && projectSurface(site.point, size.width, size.height, zoom, camera))
+  const comparing = activeSlot === 1 || sites[1] !== null
+  const siteCount = sites.filter(Boolean).length
   const pointerSurface = ready && hover && pickSurface(hover.x, hover.y, size.width, size.height, zoom, camera)
 
   useEffect(() => {
@@ -121,7 +126,7 @@ function MoonExplorer() {
       if (frame !== null) return
       frame = requestAnimationFrame(() => {
         frame = null
-        renderer.draw(camera, ephemeris, zoom, showCoverage, activeSelection, diameterKm)
+        renderer.draw(camera, ephemeris, zoom, showCoverage, mappedSites)
       })
     }
     redraw.current()
@@ -129,7 +134,53 @@ function MoonExplorer() {
       if (frame !== null) cancelAnimationFrame(frame)
       redraw.current = null
     }
-  }, [ready, renderer, camera, ephemeris, zoom, size, showCoverage, activeSelection, diameterKm])
+  }, [ready, renderer, camera, ephemeris, zoom, size, showCoverage, mappedSites])
+
+  function selectSite(point) {
+    const samePoint = (site) => site && Math.hypot(...site.point.map((value, i) => value - point[i])) < 1e-6
+    if (samePoint(sites[1 - activeSlot])) {
+      setSelectionNotice('Choose a different location for the comparison.')
+      return false
+    }
+    setSelectionNotice('')
+    if (!samePoint(sites[activeSlot])) {
+      setSites((previous) => previous.map((site, index) => index === activeSlot
+        ? { point, diameterKm: site?.diameterKm ?? SELECTION_DIAMETER_KM }
+        : site))
+    }
+    return true
+  }
+
+  function chooseSlot(slot) {
+    setActiveSlot(slot)
+    setSelectionNotice('')
+  }
+
+  function removeSite(slot) {
+    setSites((previous) => [previous[1 - slot], null])
+    chooseSlot(0)
+  }
+
+  function changeDiameter(slot, diameterKm) {
+    setSites((previous) => previous.map((site, index) => index === slot
+      ? { ...site, diameterKm }
+      : site))
+  }
+
+  function updateSetting(key, value) {
+    const next = { ...settings, [key]: value }
+    setSettings(next)
+    saveMissionSettings(next)
+  }
+
+  function openAnalysis(event) {
+    event.preventDefault()
+    if (!siteCount || range.error) return
+    const locations = sites.filter(Boolean).map(({ point, diameterKm }) => ({ ...coordinates(point), diameterKm }))
+    const plan = { sites: locations, dates, settings }
+    window.history.replaceState(window.history.state, '', missionUrl('moon.html', plan))
+    window.location.assign(missionUrl('skyline-v3.html', plan))
+  }
 
   function rotate(deltaLongitude, deltaLatitude) {
     setOrbit((previous) => {
@@ -158,8 +209,7 @@ function MoonExplorer() {
       setSearchError('That location is outside the clickable area. Try the Earth-facing side or either pole.')
       return
     }
-    setOrbit({ ...target, zoom })
-    setSelected(point)
+    if (selectSite(point)) setOrbit({ ...target, zoom })
     setHover(null)
     setSearchError('')
   }
@@ -203,7 +253,7 @@ function MoonExplorer() {
     if (event.type !== 'pointerup' || !ready) return
     if (!active.moved && Math.hypot(position.x - active.start.x, position.y - active.start.y) < 5) {
       const surface = pickSurface(position.x, position.y, size.width, size.height, zoom, camera)
-      if (surface) setSelected(surface)
+      if (surface) selectSite(surface)
     }
     if (event.pointerType === 'mouse') setHover(position)
   }
@@ -243,10 +293,10 @@ function MoonExplorer() {
       case 'Home': setOrbit(INITIAL_VIEW); break
       case 'Enter': {
         const surface = pickSurface(size.width / 2, size.height / 2, size.width, size.height, zoom, camera)
-        if (surface) setSelected(surface)
+        if (surface) selectSite(surface)
         break
       }
-      case 'Escape': setSelected(null); break
+      case 'Escape': removeSite(activeSlot); break
       default: return
     }
     event.preventDefault()
@@ -266,23 +316,32 @@ function MoonExplorer() {
       </header>
       <div className="moon-workspace">
         <aside className="moon-controls">
-          <h2>Observation time</h2>
-          <label>
-            Date (UTC)
-            <input type="date" value={date} min={MIN_DATE} max={MAX_DATE}
-              onInput={(event) => setDate(event.currentTarget.value)}
-              onChange={(event) => setDate(event.currentTarget.value)} />
-          </label>
-          <label>
-            Time (UTC)
-            <select value={time} onChange={(event) => setTime(event.target.value)}>
-              {TIMES.map((option) => <option key={option}>{option}</option>)}
-            </select>
-          </label>
-          <div className="moon-phase">
-            <span>Earth-facing illumination</span>
-            <strong>{ephemeris ? `${(ephemeris.illuminated_fraction * 100).toFixed(1)}%` : '—'}</strong>
-          </div>
+          <h2>Mission dates</h2>
+          <form className="moon-mission-form" onSubmit={openAnalysis}>
+            <MissionDateFields dates={dates} onChange={setDates} />
+            {range.error && <p className="moon-form-error" role="alert">{range.error}</p>}
+            <button type="submit" className="moon-primary-action" disabled={!siteCount || !!range.error}>
+              {siteCount === 2 ? 'Compare' : 'Explore'}
+            </button>
+          </form>
+          <details className="moon-settings">
+            <summary>Settings</summary>
+            <label>Playback interval
+              <select value={settings.stepMinutes} onChange={(event) => updateSetting('stepMinutes', Number(event.target.value))}>
+                {PLAYBACK_INTERVALS.map((value) => <option value={value} key={value}>
+                  {value < 60 ? `${value} min` : `${value / 60} h`}
+                </option>)}
+              </select>
+            </label>
+            <label>Shadow height above ground <strong>{settings.mastHeightM} m</strong>
+              <input type="range" min={0} max={50} step={0.5} value={settings.mastHeightM}
+                onChange={(event) => updateSetting('mastHeightM', event.currentTarget.valueAsNumber)} />
+            </label>
+            <label>Observer height above ground <strong>{settings.eyeHeightM} m</strong>
+              <input type="range" min={0} max={100} step={0.1} value={settings.eyeHeightM}
+                onChange={(event) => updateSetting('eyeHeightM', event.currentTarget.valueAsNumber)} />
+            </label>
+          </details>
           <div className="moon-view-actions">
             <button type="button" disabled={!ready} onClick={() => setOrbit(INITIAL_VIEW)}>Reset view</button>
             <div className="moon-poles">
@@ -292,32 +351,93 @@ function MoonExplorer() {
                 onClick={() => setOrbit({ longitude: 0, latitude: -88.5, zoom: 2 })}>South pole</button>
             </div>
           </div>
-          <p id="moon-instructions">Drag to tilt. Scroll over a feature to zoom towards it, or use + and − to zoom at the centre. Select a mapped point for its coordinates. With the globe focused, use the arrow keys to tilt and Enter to select its centre.</p>
+          <p id="moon-instructions">Drag to tilt. Scroll over a feature to zoom towards it, or use + and − to zoom at the centre. Select a mapped point to set a site. With the globe focused, use the arrow keys to tilt and Enter to select its centre.</p>
           <a className="moon-credit" href="https://trek.nasa.gov/moon/" target="_blank" rel="noreferrer">
             NASA Moon Trek · LROC / LOLA
           </a>
         </aside>
-        <section className="moon-stage" aria-label="Interactive lunar globe">
-          <canvas ref={canvas} tabIndex={0} aria-label="Moon surface" aria-describedby="moon-instructions"
-            className={`moon-canvas${dragging ? ' is-dragging' : ''}${ready ? '' : ' is-loading'}`}
-            onPointerDown={startDrag} onPointerMove={movePointer} onPointerUp={endDrag}
-            onLostPointerCapture={endDrag} onPointerCancel={endDrag} onPointerLeave={() => setHover(null)}
-            onKeyDown={handleKey} />
-          {status && <div className="moon-status" role="status">{status}</div>}
-          {pin && <span className="moon-pin" aria-hidden="true" style={{ left: pin.x, top: pin.y }} />}
-          <div className="moon-scale" aria-label={scale ? `Map centre scale: ${scale.distance} kilometres` : 'Map scale unavailable'}>
-            <span>{scale ? `${scale.distance} km` : '— km'}</span>
-            <span className="moon-scale-line" style={{ width: scale?.pixels ?? 0 }} aria-hidden="true" />
+        <div className="moon-exploration">
+          <div className="moon-stage-tools">
+            <div className="moon-site-picker">
+              <div className="moon-site-picker-buttons" role="group" aria-label="Site selection">
+                {SITE_NUMBERS.slice(0, comparing ? 2 : 1).map((number) => (
+                  <button key={number} type="button" className="moon-site-choice" data-site={number}
+                    aria-pressed={activeSlot === number - 1} onClick={() => chooseSlot(number - 1)}>
+                    <span className="moon-site-dot" aria-hidden="true" />Site {number}
+                  </button>
+                ))}
+                {!comparing && sites[0] && (
+                  <button type="button" onClick={() => chooseSlot(1)}>Add site to compare</button>
+                )}
+                {comparing && !sites[1] && (
+                  <button type="button" onClick={() => chooseSlot(0)}>Cancel comparison</button>
+                )}
+              </div>
+              <p className="moon-pick-hint" role="status">
+                {selectionNotice || (sites[activeSlot]
+                  ? `Click the Moon or enter coordinates to move Site ${activeSlot + 1}.`
+                  : `Click the Moon or enter coordinates to set Site ${activeSlot + 1}.`)}
+              </p>
+            </div>
           </div>
-          {pointerSurface && (
-            <output className="moon-hover" style={{
-              left: Math.max(8, Math.min(hover.x + 14, size.width - 205)),
-              top: Math.max(8, Math.min(hover.y + 14, size.height - 41)),
-            }}>{coordinateText(pointerSurface)}</output>
+          <section className="moon-stage" aria-label="Interactive lunar globe">
+            <canvas ref={canvas} tabIndex={0} aria-label="Moon surface" aria-describedby="moon-instructions"
+              className={`moon-canvas${dragging ? ' is-dragging' : ''}${ready ? '' : ' is-loading'}`}
+              onPointerDown={startDrag} onPointerMove={movePointer} onPointerUp={endDrag}
+              onLostPointerCapture={endDrag} onPointerCancel={endDrag} onPointerLeave={() => setHover(null)}
+              onKeyDown={handleKey} />
+            {status && <div className="moon-status" role="status">{status}</div>}
+            {pins.map((pin, index) => pin && (
+              <span key={index} className="moon-pin" data-site={index + 1} aria-hidden="true"
+                style={{ left: pin.x, top: pin.y }}>{index + 1}</span>
+            ))}
+            <div className="moon-scale" aria-label={scale ? `Map centre scale: ${scale.distance} kilometres` : 'Map scale unavailable'}>
+              <span>{scale ? `${scale.distance} km` : '— km'}</span>
+              <span className="moon-scale-line" style={{ width: scale?.pixels ?? 0 }} aria-hidden="true" />
+            </div>
+            {pointerSurface && (
+              <output className="moon-hover" style={{
+                left: Math.max(8, Math.min(hover.x + 14, size.width - 205)),
+                top: Math.max(8, Math.min(hover.y + 14, size.height - 41)),
+              }}>{coordinateText(pointerSurface)}</output>
+            )}
+            <div className="moon-stage-actions">
+              <label className="moon-coverage-toggle">
+                <input type="checkbox" checked={showCoverage}
+                  onChange={(event) => setShowCoverage(event.target.checked)} />
+                Show clickable area
+              </label>
+              {showCoverage && <p className="moon-coverage-note">
+                Click anywhere in the highlighted area. Terrain outside it is shown for context and is unavailable for site calculations.
+              </p>}
+              <div className="moon-zoom" role="group" aria-label="Zoom controls">
+                <button type="button" disabled={!ready || zoom >= maxZoom} onClick={() => changeZoom(1.35)}
+                  aria-label="Zoom in">+</button>
+                <button type="button" disabled={!ready || zoom <= 1} onClick={() => changeZoom(1 / 1.35)}
+                  aria-label="Zoom out">−</button>
+              </div>
+            </div>
+          </section>
+          {siteCount > 0 && (
+            <section className="moon-site-panel" aria-label={siteCount === 2 ? 'Site comparison' : 'Selected site'}>
+              {siteCount === 2 && <h2 className="moon-compare-heading">Site comparison</h2>}
+              <div className="moon-site-cards">
+                {sites.map((site, index) => site && (
+                  <SiteCard key={index} site={site} number={index + 1}
+                    onRemove={() => removeSite(index)}
+                    onDiameter={(value) => changeDiameter(index, value)}
+                    onLocate={ready && mappedSites[index] ? () => {
+                      const { lat, lon } = coordinates(site.point)
+                      setOrbit({ latitude: lat, longitude: lon, zoom })
+                    } : null} />
+                ))}
+              </div>
+            </section>
           )}
-          <div className="moon-stage-top">
+          <details className="moon-coordinate-entry">
+            <summary>Enter coordinates</summary>
             <form className="moon-coordinate-search" onSubmit={findCoordinates}>
-              <label htmlFor="moon-coordinates">Search latitude, longitude</label>
+              <label htmlFor="moon-coordinates">Latitude, longitude</label>
               <div>
                 <input id="moon-coordinates" type="search" placeholder="-89.5, -137"
                   value={query} onChange={(event) => {
@@ -325,44 +445,38 @@ function MoonExplorer() {
                     setSearchError('')
                   }} aria-invalid={Boolean(searchError)}
                   aria-describedby={searchError ? 'moon-search-error' : undefined} />
-                <button type="submit" disabled={!ready}>Go</button>
+                <button type="submit" disabled={!ready}>Set site {activeSlot + 1}</button>
               </div>
               {searchError && <p id="moon-search-error" role="alert">{searchError}</p>}
             </form>
-            <div className="moon-selection" role="group" aria-label="Landing site">
-              <div className="moon-selection-heading">
-                <span>{selected ? coordinateText(selected) : 'Select a landing site'}</span>
-                {selected && (
-                  <button type="button" aria-label="Clear selected point" onClick={() => setSelected(null)}>×</button>
-                )}
-              </div>
-              <label className="moon-selection-diameter">
-                <span>Diameter <strong>{diameterKm} km</strong></span>
-                <input type="range" min={MIN_DIAMETER_KM} max={MAX_DIAMETER_KM} step={1}
-                  value={diameterKm} onChange={(event) => setDiameterKm(event.currentTarget.valueAsNumber)}
-                  aria-label="Landing site diameter" aria-valuetext={`${diameterKm} km`} />
-              </label>
-            </div>
-          </div>
-          <div className="moon-stage-actions">
-            <label className="moon-coverage-toggle">
-              <input type="checkbox" checked={showCoverage}
-                onChange={(event) => setShowCoverage(event.target.checked)} />
-              Show clickable area
-            </label>
-            {showCoverage && <p className="moon-coverage-note">
-              Click anywhere in the highlighted area. Terrain outside it is shown for context and is unavailable for site calculations.
-            </p>}
-            <div className="moon-zoom" role="group" aria-label="Zoom controls">
-              <button type="button" disabled={!ready || zoom >= maxZoom} onClick={() => changeZoom(1.35)}
-                aria-label="Zoom in">+</button>
-              <button type="button" disabled={!ready || zoom <= 1} onClick={() => changeZoom(1 / 1.35)}
-                aria-label="Zoom out">−</button>
-            </div>
-          </div>
-        </section>
+          </details>
+        </div>
       </div>
     </main>
+  )
+}
+
+function SiteCard({ site, number, onRemove, onDiameter, onLocate }) {
+  const title = `moon-site-${number}-title`
+  return (
+    <article className="moon-site-card" data-site={number} aria-labelledby={title}>
+      <header className="moon-card-heading">
+        <div>
+          <h3 id={title}><span className="moon-site-dot" aria-hidden="true" />Site {number}</h3>
+          <p>{coordinateText(site.point)}</p>
+        </div>
+        <button type="button" className="moon-card-close" aria-label={`Remove Site ${number}`} onClick={onRemove}>×</button>
+      </header>
+      <label className="moon-selection-diameter">
+        <span>Diameter <strong>{site.diameterKm} km</strong></span>
+        <input type="range" min={MIN_DIAMETER_KM} max={MAX_DIAMETER_KM} step={1}
+          value={site.diameterKm} onChange={(event) => onDiameter(event.currentTarget.valueAsNumber)}
+          aria-label={`Site ${number} diameter`} aria-valuetext={`${site.diameterKm} km`} />
+      </label>
+      <div className="moon-card-actions">
+        <button type="button" disabled={!onLocate} onClick={onLocate}>Center on site</button>
+      </div>
+    </article>
   )
 }
 

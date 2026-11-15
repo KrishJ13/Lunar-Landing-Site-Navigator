@@ -1,5 +1,13 @@
 // Reading one time step out of the sunlight sequence (POST /api/site/illumination). No React here.
 
+export function formatDuration(seconds) {
+  if (seconds > 0 && seconds < 60) return '<1 min'
+  const minutes = Math.round(seconds / 60)
+  return [Math.floor(minutes / 1440) && `${Math.floor(minutes / 1440)} d`,
+    Math.floor(minutes / 60) % 24 && `${Math.floor(minutes / 60) % 24} h`,
+    minutes % 60 && `${minutes % 60} min`].filter(Boolean).join(' ') || '0 min'
+}
+
 /** UTC instant of step k as "YYYY-MM-DD HH:MM". */
 export function stepTime(times, k) {
   const ms = Date.parse(times.start_utc) + k * times.step_minutes * 60_000

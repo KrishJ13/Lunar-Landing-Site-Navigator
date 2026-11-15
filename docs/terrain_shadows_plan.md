@@ -1,6 +1,8 @@
 # Terrain, shadows and power: design plan
 
-Status: proposal for review (revised 2026-11-15). Nothing here is built yet.
+Historical design notes (revised 2026-11-15). References to the original and V2
+frontends describe earlier implementations. See the [current app guide](moon_explorer.md)
+for the Moon Explorer and Skyline V3 workflow.
 
 Goal: from a site (lat, lon), landing-site diameter D (5–50 km), eye/panel height
 and a UTC date range, produce:

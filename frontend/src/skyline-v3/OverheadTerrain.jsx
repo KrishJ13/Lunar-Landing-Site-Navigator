@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ELEVATION_COLORS, lookAt, multiply, perspective, project } from './terrainRenderer.js'
+import { ELEVATION_COLORS, HEAT_COLORS, lookAt, multiply, perspective, project } from './terrainRenderer.js'
+import { IntensityLegend } from './IlluminationPanel.jsx'
+import { formatDuration } from './sequence.js'
 import { sizeCanvas, useWidth } from './useCanvasSize.js'
 import { useTerrainRenderer } from './useTerrainRenderer.js'
 
@@ -8,7 +10,10 @@ const FOV_Y_DEG = 45
 const TILT_MIN = 5
 const TILT_MAX = 89
 const elevationGradient = `linear-gradient(to right in srgb, ${ELEVATION_COLORS.join(', ')})`
+const sunlightGradient = `linear-gradient(to right in srgb, ${HEAT_COLORS.join(', ')})`
 const formatElevation = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
+const formatPercent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 })
+const formatEnergy = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 })
 
 /**
  * Overhead view of the landing site: a perspective camera orbiting the site
@@ -17,7 +22,7 @@ const formatElevation = new Intl.NumberFormat(undefined, { maximumFractionDigits
  * boundary; the yellow marker is the observer's eye.
  */
 export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' }, overlay = null, field = null, bodies = null,
-  sunNow = null, intensity = false, shadowHeightM = 0.5, frameKey, height = 440 }) {
+  sunNow = null, intensity = false, shadowHeightM = 0.5, frameKey, height = 440, missionLayer = null }) {
   const wrapRef = useRef(null)
   const glRef = useRef(null)
   const overlayRef = useRef(null)
@@ -34,6 +39,9 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
   const [showElevation, setShowElevation] = useState(true)
   const [drawnFrame, setDrawnFrame] = useState(null)
   const [drawError, setDrawError] = useState(null)
+  const [selection, setSelection] = useState(null)
+  const pointIndex = missionLayer && (selection?.points === missionLayer.points ? selection.index : missionLayer.centre)
+  const point = missionLayer?.points[pointIndex]
   const reveal = frameKey !== null && drawnFrame === frameKey && !error && !drawError
   const drag = useRef(null)
 
@@ -74,7 +82,7 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
         sizeCanvas(overlayRef.current, width, height)
         renderer.draw({ viewProj, camera, lighting, showElevation, dpr, intensity, sunNow })
         drawOverlay(overlayRef.current.getContext('2d'), viewProj, width, height, dpr, diameter, eye, bodies,
-          geometry.outerRadius)
+          geometry.outerRadius, point)
         if (drawnFrame !== frameKey) flushSync(() => setDrawnFrame(frameKey))
       } catch (err) {
         setDrawError(err.message)
@@ -82,7 +90,7 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
     })
     return () => cancelAnimationFrame(frame)
   }, [frameKey, drawnFrame, measuredWidth, error, drawError, rendererRef, geometry, viewProj, camera, lighting, overlay, field,
-    bodies, sunNow, intensity, showElevation, width, height, diameter, eye])
+    bodies, sunNow, intensity, showElevation, width, height, diameter, eye, point])
 
   useEffect(() => {
     const el = glRef.current
@@ -96,13 +104,65 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
 
   function onPointerDown(e) {
     e.currentTarget.setPointerCapture(e.pointerId)
-    drag.current = { x: e.clientX, y: e.clientY, yaw, tilt }
+    drag.current = { x: e.clientX, y: e.clientY, yaw, tilt, moved: false }
   }
   function onPointerMove(e) {
     const d = drag.current
     if (!d) return
+    if (missionLayer && !d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 5) return
+    d.moved = true
     setYaw((((d.yaw - (e.clientX - d.x) * 0.3) % 360) + 360) % 360)
     setTilt(Math.min(TILT_MAX, Math.max(TILT_MIN, d.tilt + (e.clientY - d.y) * 0.3)))
+  }
+
+  function selectPoint(index) {
+    if (missionLayer?.points[index]) setSelection({ points: missionLayer.points, index })
+  }
+
+  function onPointerUp(e) {
+    const moved = drag.current?.moved
+    drag.current = null
+    if (!missionLayer || moved) return
+    const bounds = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - bounds.left
+    const y = e.clientY - bounds.top
+    let best = null
+    let distance = 14
+    for (const [index, node] of missionLayer.points.entries()) {
+      if (!node) continue
+      const projected = project(viewProj, node.position, width, height)
+      if (!projected) continue
+      const d = Math.hypot(x - projected[0], y - projected[1])
+      if (d < distance) { best = index; distance = d }
+    }
+    selectPoint(best)
+  }
+
+  function onMapKeyDown(e) {
+    const direction = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key]
+    if (!missionLayer || !point || !direction) return
+    e.preventDefault()
+    const origin = project(viewProj, point.position, width, height)
+    if (!origin) return
+    const { nx } = missionLayer.overlay
+    const column = pointIndex % nx
+    let best = null
+    let bestAlignment = 0
+    for (let rowOffset = -1; rowOffset <= 1; rowOffset++) {
+      for (let columnOffset = -1; columnOffset <= 1; columnOffset++) {
+        if (column + columnOffset < 0 || column + columnOffset >= nx || (!rowOffset && !columnOffset)) continue
+        const index = pointIndex + rowOffset * nx + columnOffset
+        const node = missionLayer.points[index]
+        if (!node) continue
+        const target = project(viewProj, node.position, width, height)
+        if (!target) continue
+        const dx = target[0] - origin[0]
+        const dy = target[1] - origin[1]
+        const alignment = (dx * direction[0] + dy * direction[1]) / Math.hypot(dx, dy)
+        if (alignment > bestAlignment) { best = index; bestAlignment = alignment }
+      }
+    }
+    selectPoint(best)
   }
 
   return (
@@ -114,11 +174,14 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
             className="v2-gl draggable"
             style={{ width, height }}
             role="img"
-            aria-label={`Overhead ${showElevation ? 'elevation map' : 'shaded terrain'} of the ${terrain.header.site.diameter_km} km landing site`}
+            aria-label={missionLayer ? `${missionLayer.metric === 'energy' ? 'Solar energy map' : 'Mission sunlight map'}. Use arrow keys to select a nearby point.`
+              : `Overhead ${intensity ? 'solar intensity map' : showElevation ? 'elevation map' : 'shaded terrain'} of the ${terrain.header.site.diameter_km} km landing site`}
+            tabIndex={missionLayer ? 0 : undefined}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
-            onPointerUp={() => { drag.current = null }}
+            onPointerUp={onPointerUp}
             onPointerCancel={() => { drag.current = null }}
+            onKeyDown={onMapKeyDown}
           />
           <canvas ref={overlayRef} className="v2-overlay" style={{ width, height }} aria-hidden="true" />
         </div>
@@ -128,14 +191,62 @@ export default function OverheadTerrain({ terrain, lighting = { mode: 'fixed' },
         <span>Looking {Math.round(yaw)}° · tilt {Math.round(tilt)}° · camera {(distance / 1000).toFixed(1)} km from the centre</span>
         <button type="button" onClick={() => { setYaw(0); setTilt(40); setDistance(homeDistance) }}>Reset view</button>
         <button type="button" onClick={() => { setTilt(TILT_MAX) }}>Top down</button>
-        <label>
+        {!missionLayer && !intensity && <label>
           <input type="checkbox" checked={showElevation} onChange={(e) => setShowElevation(e.target.checked)} />
           Colour by elevation
-        </label>
-        <span className="v2-muted">Drag to orbit, scroll to zoom. True vertical scale.</span>
+        </label>}
+        {missionLayer
+          ? <button type="button" onClick={() => {
+            setYaw(0)
+            setTilt(TILT_MAX)
+            setDistance(Math.max(diameter, homeDistance * 0.65))
+            selectPoint(missionLayer.best)
+          }}>{missionLayer.metric === 'energy' ? 'Show highest-energy point' : 'Show longest-lit point'}</button>
+          : <span className="v2-muted">Drag to orbit, scroll to zoom. True vertical scale.</span>}
       </div>
-      {showElevation && !error && overlay?.mode !== 'heat' && !intensity && <ElevationLegend range={geometry.elevationRange} />}
+      {missionLayer && !error && <MissionLayerLegend map={missionLayer} point={point} />}
+      {intensity && sunNow && !error && <IntensityLegend flux={sunNow.solarFlux} />}
+      {showElevation && !error && !missionLayer && overlay?.mode !== 'heat' && !intensity &&
+        <ElevationLegend range={geometry.elevationRange} />}
     </div>
+  )
+}
+
+function MissionLayerLegend({ map, point }) {
+  const energy = map.metric === 'energy'
+  const location = point && [`${Math.abs(Math.round(point.x))} m ${point.x < 0 ? 'west' : 'east'}`,
+    `${Math.abs(Math.round(point.y))} m ${point.y < 0 ? 'south' : 'north'}`].join(', ')
+  return (
+    <section className="v3-sunlight-readout" aria-label={energy ? 'Mission solar energy details' : 'Mission sunlight details'}>
+      <figure className="v2-elevation-legend">
+        <figcaption>{energy ? 'Direct solar energy received over the mission' : 'Share of mission in sunlight'}</figcaption>
+        {energy && map.max === 0 ? <p>No direct solar energy recorded in the landing area.</p> : <>
+          <div className="v2-elevation-ramp" style={{ background: sunlightGradient }} aria-hidden="true" />
+          <div className="v2-elevation-labels">{energy
+            ? <><span>0</span><span>{formatEnergy.format(map.max / 2)}</span><span>{formatEnergy.format(map.max)} kWh/m²</span></>
+            : <><span>0%</span><span>50%</span><span>100%</span></>}</div>
+        </>}
+        <p className="v2-muted">Select a point inside the landing area.</p>
+      </figure>
+      {point && <div className="v3-sunlight-point" aria-live="polite">
+        <strong>Selected point</strong>
+        <span className="v2-muted">{location} of site centre</span>
+        <dl>
+          {energy && <div><dt>Solar energy received</dt><dd>{Number.isFinite(point.energy)
+            ? `${formatEnergy.format(point.energy)} kWh/m²` : 'Unavailable'}</dd></div>}
+          <div><dt>Time in sunlight</dt><dd>{formatDuration(point.sunlight * 3600)} · {formatPercent.format(point.sunlight / map.hours)}</dd></div>
+          {!energy && <div><dt>Longest darkness</dt><dd>{formatDuration(point.darkness * 3600)}</dd></div>}
+        </dl>
+      </div>}
+      <p className="v2-muted v2-note v3-sunlight-method">
+        {energy
+          ? <>Estimate for a surface aligned with the local slope. Shadows are sampled at {map.height} m above ground
+            every {map.stepMinutes} min on a {Math.round(map.spacing)} m grid. Panel output depends on its mounting and efficiency.</>
+          : <>Estimated at {map.height} m above ground, with samples every {map.stepMinutes} min on a {Math.round(map.spacing)} m grid.
+            Sunlight counts when at least {formatPercent.format(map.visible_disc_threshold)} of the Sun is visible.</>}
+        {' '}Estimates exclude eclipses and may miss brief gaps.
+      </p>
+    </section>
   )
 }
 
@@ -159,7 +270,7 @@ function ElevationLegend({ range: [min, max] }) {
   )
 }
 
-function drawOverlay(ctx, viewProj, width, height, dpr, diameter, eye, bodies, outerRadius) {
+function drawOverlay(ctx, viewProj, width, height, dpr, diameter, eye, bodies, outerRadius, point) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, width, height)
   ctx.font = '12px system-ui, sans-serif'
@@ -175,7 +286,7 @@ function drawOverlay(ctx, viewProj, width, height, dpr, diameter, eye, bodies, o
   // Observer: a short vertical tick from the ground to the eye, and a dot at the eye.
   const ground = project(viewProj, [0, 0, -eye], width, height)
   const eyeP = project(viewProj, [0, 0, Math.max(eye, diameter * 0.01)], width, height)
-  if (ground && eyeP) {
+  if (ground && eyeP && !point) {
     ctx.strokeStyle = '#ffd43b'
     ctx.lineWidth = 2
     ctx.beginPath()
@@ -187,6 +298,19 @@ function drawOverlay(ctx, viewProj, width, height, dpr, diameter, eye, bodies, o
     ctx.fillStyle = '#ffd43b'
     ctx.fill()
     label('You', [eyeP[0], eyeP[1] - 10], '#ffd43b')
+  }
+  if (point) {
+    const marker = project(viewProj, point.position, width, height)
+    if (marker) {
+      ctx.beginPath()
+      ctx.arc(marker[0], marker[1], 5, 0, 2 * Math.PI)
+      ctx.strokeStyle = '#12131a'
+      ctx.lineWidth = 4
+      ctx.stroke()
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
   }
   // North, east, south, west just outside the site boundary.
   const r = (diameter / 2) * 1.12
@@ -201,22 +325,27 @@ const fmtDistance = (km) => (km > 1e6 ? `${(km / 1e6).toFixed(1)} million km` : 
 
 /**
  * Sun and Earth as small markers in their true direction from the site centre
- * (azimuth and elevation in the site's frame), just beyond the surround at a
- * schematic distance (1.1 x its radius): a guide, not to scale. A line joins each
- * to the centre; the label gives the real azimuth, elevation and distance.
+ * (azimuth and elevation in the site's frame), at a schematic distance that
+ * fits the current view. The label gives the real azimuth, elevation and distance.
  */
 function drawBodyMarkers(ctx, viewProj, width, height, outerRadius, eye, bodies, label) {
   const centre = [0, 0, -eye]
-  const reach = 1.1 * outerRadius
   const ground = project(viewProj, centre, width, height)
+  if (!ground) return
   for (const [key, name, colour] of MARKERS) {
     const b = bodies[key]
     const a = (b.azimuth_deg * Math.PI) / 180
     const e = (b.elevation_deg * Math.PI) / 180
-    const p = project(viewProj, [reach * Math.cos(e) * Math.sin(a), reach * Math.cos(e) * Math.cos(a),
-      -eye + reach * Math.sin(e)], width, height)
+    let reach = 1.1 * outerRadius
+    let p = null
+    for (let attempt = 0; attempt < 12; attempt++) {
+      p = project(viewProj, [reach * Math.cos(e) * Math.sin(a), reach * Math.cos(e) * Math.cos(a),
+        -eye + reach * Math.sin(e)], width, height)
+      if (p && p[0] >= 10 && p[0] <= width - 10 && p[1] >= 25 && p[1] <= height - 10) break
+      reach *= 0.65
+    }
     const foot = project(viewProj, [reach * Math.cos(e) * Math.sin(a), reach * Math.cos(e) * Math.cos(a), -eye], width, height)
-    if (!p || !ground) continue
+    if (!p) continue
     const below = b.elevation_deg < 0
     ctx.save()
     ctx.strokeStyle = colour
@@ -241,6 +370,7 @@ function drawBodyMarkers(ctx, viewProj, width, height, outerRadius, eye, bodies,
     ctx.fill()
     ctx.restore()
     const text = `${name} · az ${b.azimuth_deg.toFixed(1)}° · ${b.elevation_deg.toFixed(2)}° ${below ? 'below' : 'up'} · ${fmtDistance(b.distance_km)}`
-    label(text, [p[0], p[1] - 12], colour)
+    const halfLabel = Math.min(width / 2, ctx.measureText(text).width / 2 + 4)
+    label(text, [Math.max(halfLabel, Math.min(width - halfLabel, p[0])), p[1] - 12], colour)
   }
 }

@@ -59,6 +59,7 @@ from .schemas import (
     SmoothHorizon,
     SurroundingsInfo,
     SiteTerrainRequest,
+    SiteWindowsRequest,
     IlluminationRequest,
     ShadowFieldRequest,
     ViewRequest,
@@ -352,6 +353,26 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
                 app.state.terrain_cache.popitem(last=False)
         return Response(payload, media_type="application/octet-stream")
 
+    @app.post("/api/site/windows")
+    def site_windows(request: SiteWindowsRequest) -> dict:
+        """Direct sunlight and geometric Earth visibility at the panorama observer."""
+        from lunar_sky import positions
+        from lunar_sky.api import _spice_lock
+        from lunar_sky.site_windows import visibility_windows
+
+        if not getattr(app.state, "kernels_ready", False):
+            raise HTTPException(503, "Lunar ephemeris kernels are unavailable.")
+        try:
+            with _spice_lock:
+                if app.state.coverage is None:
+                    app.state.coverage = positions.coverage_windows()
+                coverage = app.state.coverage
+            return visibility_windows(request.lat, request.lon, request.observer_elevation_m,
+                                      request.start_utc, request.hours, request.skyline_deg,
+                                      coverage, _spice_lock, include_next_event=request.include_next_event)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @app.post(
         "/api/site/illumination",
         response_class=Response,
@@ -364,7 +385,7 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
         from lunar_sky.api import _spice_lock
 
         from ..horizon_maps import NEAR_TARGET_M, map_surfaces
-        from ..illumination import illumination_series, summarise
+        from ..illumination import DARK, illumination_series, mission_solar_energy, mission_sunlight, summarise
 
         tiles = app.state.horizon_tiles
         if tiles is None:
@@ -381,16 +402,33 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
         near, _far = map_surfaces(app.state.terrain_products, NEAR_TARGET_M)
         hm.centre_ground_m = float(near(np.array([request.lat]), np.array([lon]))[0])
         t1 = time.perf_counter()
-        eye_m = hm.centre_ground_m + request.eye_height_m
+        eye_m = request.observer_elevation_m
+        if eye_m is None:
+            eye_m = hm.centre_ground_m + request.eye_height_m
         try:
             with _spice_lock:
                 times, bodies, sun_m, sun_radius_m = positions.body_series(
-                    request.lat, lon, eye_m, request.start_utc, request.hours, request.step_minutes)
+                    request.lat, lon, eye_m, request.start_utc, request.hours, request.step_minutes,
+                    include_end=request.include_mission_sunlight)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         t2 = time.perf_counter()
         lit, _az, _el = illumination_series(hm, sun_m, sun_radius_m)
-        mean, longest = summarise(lit, hm.in_disc, request.step_minutes / 60.0)
+        step_h = request.step_minutes / 60.0
+        map_stats = {}
+        if request.include_mission_sunlight:
+            offsets = np.arange(len(times)) * step_h
+            offsets[-1] = request.hours
+            surface_hours, surface_dark = mission_sunlight(lit, hm.in_disc, offsets)
+            energy = mission_solar_energy(hm, sun_m, lit, offsets)
+            map_stats = {"mission_sunlit_h": surface_hours.astype(np.float32),
+                         "mission_longest_dark_h": surface_dark.astype(np.float32),
+                         "mission_solar_energy_kwh_m2": energy.astype(np.float32)}
+            # Keep the playback frames on their existing, uniformly spaced time axis.
+            count = int(np.floor(request.hours / step_h + 1e-9)) + 1
+            times, lit = times[:count], lit[:count]
+            bodies = {body: {key: values[:count] for key, values in columns.items()} for body, columns in bodies.items()}
+        mean, longest = summarise(lit, hm.in_disc, step_h)
         t3 = time.perf_counter()
         header = {
             "site": {"lat": request.lat, "lon": lon, "diameter_km": request.diameter_km,
@@ -409,10 +447,13 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
             "method": ("Horizon maps (1 deg) per grid point; visible fraction of the Sun's disc (SPICE, LT+S) above "
                        "the horizon at each time step; lunar.horizon_maps and lunar.illumination. Sun and Earth "
                        "(sun_*/earth_*: azimuth, elevation, distance, angular radius) are apparent from the eye "
-                       "(site centre ground + eye_height_m), as GET /api/v1/positions."),
+                       "(panorama eye elevation when supplied, otherwise site centre ground + eye_height_m), "
+                       "as GET /api/v1/positions."),
             "timings_s": {"horizon_maps": round(t1 - t0, 3), "spice": round(t2 - t1, 3),
                           "illumination": round(t3 - t2, 3)},
         }
+        if request.include_mission_sunlight:
+            header["mission_sunlight"] = {"hours": request.hours, "visible_disc_threshold": DARK}
         arrays = {
             "node_site_xy_m": hm.site_xy_m.astype(np.float32),
             "in_disc": hm.in_disc.astype(np.uint8),
@@ -420,6 +461,7 @@ def create_app(products: list[DemProduct] | None = None) -> FastAPI:
             "lit": np.rint(lit * 255).astype(np.uint8),
             "mean_lit": mean.astype(np.float32),
             "longest_dark_h": longest.astype(np.float32),
+            **map_stats,
             **{f"{body}_{key}": values.astype(np.float32)
                for body, columns in bodies.items() for key, values in columns.items()},
         }

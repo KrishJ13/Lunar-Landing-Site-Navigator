@@ -19,10 +19,12 @@ from __future__ import annotations
 import numpy as np
 
 from .config import MOON_RADIUS_M as R
-from .geometry import dot, enu_basis, unit_up
+from .geometry import dot, enu_basis, surface_vector, unit_up
 
 DISC_COLUMNS = 16
 DARK = 0.001  # below this visible fraction a point counts as dark
+SOLAR_CONSTANT_W_M2 = 1361.0
+AU_M = 149_597_870_700.0
 
 
 def horizon_at(horizon_deg, step_deg, azimuth_deg, rows=None):
@@ -99,3 +101,68 @@ def summarise(lit, in_disc, step_hours):
     longest = longest * step_hours
     longest[~in_disc] = np.nan
     return mean, longest
+
+
+def mission_sunlight(lit, in_disc, offsets_h):
+    """Per point, hours sunlit and longest darkness within the mission bounds."""
+    sunlit = np.zeros(in_disc.shape)
+    dark_run = np.zeros_like(sunlit)
+    longest = np.zeros_like(sunlit)
+    for start, end, hours in zip(lit[:-1], lit[1:], np.diff(offsets_h)):
+        start_dark, end_dark = start < DARK, end < DARK
+        change = start_dark != end_dark
+        crossing = np.divide(DARK - start, end - start, out=np.zeros_like(start), where=change)
+        dark_hours = hours * np.where(start_dark, np.where(end_dark, 1.0, crossing),
+                                      np.where(end_dark, 1.0 - crossing, 0.0))
+        sunlit += hours - dark_hours
+        dark_run = np.where(start_dark, dark_run, 0.0) + dark_hours
+        np.maximum(longest, dark_run, out=longest)
+        dark_run = np.where(end_dark, dark_run, 0.0)
+    sunlit[~in_disc] = np.nan
+    longest[~in_disc] = np.nan
+    return sunlit, longest
+
+
+def terrain_normals(hm):
+    """Outward normals of the DEM surface at mission lattice nodes, in Moon-fixed coordinates."""
+    ground = surface_vector(hm.point_lat, hm.point_lon, hm.ground_m)
+    rows, cols = np.nonzero(hm.in_disc)
+    centre = ground[rows, cols]
+
+    def neighbour(dr, dc):
+        points = ground[np.clip(rows + dr, 0, ground.shape[0] - 1),
+                        np.clip(cols + dc, 0, ground.shape[1] - 1)]
+        return np.where(np.isfinite(points).all(axis=-1, keepdims=True), points, centre)
+
+    tangent_x = neighbour(0, 1) - neighbour(0, -1)
+    tangent_y = neighbour(1, 0) - neighbour(-1, 0)
+    normal = np.cross(tangent_x, tangent_y)
+    normal *= np.where(dot(normal, centre) < 0, -1, 1)[:, None]
+    lengths = np.linalg.norm(normal, axis=-1, keepdims=True)
+    return np.divide(normal, lengths, out=np.full_like(normal, np.nan), where=lengths > 0)
+
+
+def mission_solar_energy(hm, sun_m, lit, offsets_h):
+    """Direct solar energy (kWh/m²) on terrain-facing slopes over the selected period.
+
+    Terrain occlusion uses the existing sample height and visible fraction of the solar
+    disc. The incidence factor uses the centre of the disc. Integrate trapezoidally
+    at the supplied epochs, including the exact mission end.
+    """
+    inside = hm.in_disc
+    normals = terrain_normals(hm)
+    position = surface_vector(hm.point_lat[inside], hm.point_lon[inside], hm.ground_m[inside] + hm.mast_height_m)
+    intervals = np.diff(offsets_h)
+    weights = (np.r_[0, intervals] + np.r_[intervals, 0]) / 2
+    energy = np.zeros(len(position))
+    chunk = max(1, 400_000 // max(len(position), 1))
+    for start in range(0, len(sun_m), chunk):
+        end = start + chunk
+        rays = sun_m[start:end, None, :] - position[None, :, :]
+        distance_squared = dot(rays, rays)
+        incidence = np.clip(dot(rays, normals) / np.sqrt(distance_squared), 0, 1)
+        flux = SOLAR_CONSTANT_W_M2 * (AU_M**2 / distance_squared) * incidence * lit[start:end, inside]
+        energy += (flux * weights[start:end, None]).sum(axis=0) / 1000
+    result = np.full(inside.shape, np.nan)
+    result[inside] = energy
+    return result

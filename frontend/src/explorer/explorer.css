@@ -57,18 +57,15 @@
 .moon-shell button:not(:disabled):hover { background: #253653; }
 .moon-shell button:disabled { opacity: .48; cursor: default; }
 .moon-shell :focus-visible, .moon-menu :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.moon-phase { display: grid; gap: 4px; padding: 11px 0 14px; }
-.moon-phase span, .moon-controls p, .moon-credit { font-size: .78rem; line-height: 1.55; }
-.moon-phase span, .moon-controls p { color: var(--muted); }
-.moon-phase strong { font-size: 1.5rem; font-weight: 560; font-variant-numeric: tabular-nums; }
+.moon-controls p, .moon-credit { font-size: .78rem; line-height: 1.55; }
+.moon-controls p { color: var(--muted); }
 .moon-view-actions { display: grid; gap: 6px; font-size: .78rem; }
 .moon-poles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
 .moon-controls p { margin: 14px 0 12px; }
 .moon-credit { display: inline-block; }
 .moon-stage {
   position: relative;
-  height: min(76svh, 850px);
-  min-height: 425px;
+  height: clamp(320px, 54svh, 680px);
   background: radial-gradient(ellipse at center, #141a29, #080b13 75%);
   border: 1px solid var(--edge);
   border-radius: 14px;
@@ -88,14 +85,21 @@
   position: absolute;
   transform: translate(-50%, -50%);
   pointer-events: none;
-  width: 4px;
-  height: 4px;
-  background: #f8d683;
-  box-shadow: 0 0 0 1px #0a0d15;
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  color: #101525;
+  background: var(--site-color);
+  border: 1px solid #101525;
+  box-shadow: 0 0 0 2px #0b0f1bad;
   border-radius: 50%;
+  font-size: .69rem;
+  font-weight: 750;
 }
-.moon-hover { position: absolute; z-index: 1; }
-.moon-hover, .moon-selection {
+.moon-hover {
+  position: absolute;
+  z-index: 1;
   background: #121a2af5;
   border: 1px solid #465779;
   border-radius: 8px;
@@ -104,19 +108,16 @@
   white-space: nowrap;
 }
 .moon-hover { pointer-events: none; font-size: .73rem; padding: 6px 8px; }
-.moon-selection { margin-left: auto; width: 209px; max-width: 100%; padding: 6px 8px 8px; font-size: .84rem; }
-.moon-selection-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.moon-selection-diameter { display: grid; gap: 4px; margin-top: 6px; font-size: .75rem; color: var(--muted); }
+.moon-selection-diameter { display: grid; gap: 7px; width: min(100%, 410px); font-size: .8rem; color: var(--muted); }
 .moon-selection-diameter span { display: flex; justify-content: space-between; gap: 8px; }
 .moon-selection-diameter strong { color: var(--ink); }
-.moon-selection-diameter input { width: 100%; margin: 0; accent-color: #f8d683; }
-.moon-selection button { font-size: 1.25rem; line-height: 1; padding: 3px 7px; }
+.moon-selection-diameter input { width: 100%; margin: 0; accent-color: var(--site-color); }
 .moon-zoom { display: flex; gap: 5px; }
 .moon-zoom button { width: 40px; height: 40px; font-size: 1.22rem; }
 .moon-menu { display: grid; align-items: center; padding: 50px clamp(19px, 6vw, 80px); }
 .moon-menu-inner { width: 100%; max-width: 1080px; margin: auto; }
 .moon-menu h1 { font-size: clamp(2.45rem, 7.5vw, 5.5rem); max-width: 11ch; line-height: .99; letter-spacing: -.067em; margin: 0 0 36px; }
-.moon-menu nav { display: grid; grid-template-columns: 1.25fr 1fr; gap: 15px; }
+.moon-menu nav { max-width: 680px; }
 .moon-menu-card {
   position: relative;
   display: flex;
@@ -139,30 +140,45 @@
   inset: 0;
   background: linear-gradient(0deg, #11182afc 7%, #11182a94 52%, #11182a24), var(--moon-map) center / cover;
 }
-.moon-menu-skyline { background: radial-gradient(ellipse at top right, #223255, #121a2b 70%); }
 @media (max-width: 730px) {
   .moon-workspace { grid-template-columns: 1fr; }
-  .moon-stage { min-height: 340px; height: 56svh; grid-row: 1; }
+  .moon-exploration { grid-row: 1; }
+  .moon-stage { height: clamp(300px, 47svh, 480px); }
   .moon-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
   .moon-controls h2, .moon-controls p, .moon-credit { grid-column: 1 / -1; margin: 0; }
   .moon-controls label { margin: 0; }
-  .moon-phase { padding: 0; align-content: center; }
 }
 @media (max-width: 470px) {
-  .moon-menu nav { grid-template-columns: 1fr; }
   .moon-menu-card { min-height: 148px; }
 }
 
 .moon-header p { margin: 4px 0 0; color: var(--muted); font-size: .85rem; }
-.moon-stage-top, .moon-stage-actions { position: absolute; z-index: 2; pointer-events: none; }
-.moon-stage-top > *, .moon-stage-actions > * { pointer-events: auto; }
-.moon-stage-top {
-  inset: 14px 14px auto;
+.moon-stage-actions { position: absolute; z-index: 2; pointer-events: none; }
+.moon-stage-actions > * { pointer-events: auto; }
+.moon-stage-tools {
   display: flex;
   flex-wrap: wrap;
-  align-items: start;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 16px;
+  margin-bottom: 10px;
 }
+.moon-site-picker { flex: 1 1 310px; min-width: 0; }
+.moon-site-picker-buttons, .moon-card-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.moon-site-picker-buttons button, .moon-card-actions button { font-size: .8rem; }
+[data-site="1"] { --site-color: #ffd77d; }
+[data-site="2"] { --site-color: #86e9ae; }
+.moon-site-dot {
+  display: inline-block;
+  width: .6em;
+  height: .6em;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--site-color);
+}
+.moon-site-choice { display: inline-flex; align-items: center; gap: 7px; }
+.moon-site-choice[aria-pressed="true"] { border-color: var(--site-color); color: var(--site-color); }
+.moon-pick-hint { margin: 7px 0 0; color: var(--muted); font-size: .78rem; }
 .moon-coordinate-search, .moon-coverage-toggle, .moon-coverage-note {
   color: var(--ink);
   background: #121a2af5;
@@ -170,7 +186,7 @@
   border-radius: 8px;
   font-size: .78rem;
 }
-.moon-coordinate-search { width: 238px; max-width: 100%; padding: 7px 8px; }
+.moon-coordinate-search { flex: 0 1 265px; max-width: 100%; padding: 7px 8px; }
 .moon-coordinate-search label { display: block; margin-bottom: 5px; }
 .moon-coordinate-search div { display: flex; gap: 6px; }
 .moon-coordinate-search input {
@@ -185,6 +201,29 @@
 }
 .moon-coordinate-search button { padding: 5px 9px; }
 .moon-coordinate-search p { margin: 6px 0 0; color: #ffb8ad; }
+.moon-site-panel { margin-top: 14px; }
+.moon-compare-heading { margin: 0 0 9px; font-size: 1rem; }
+.moon-site-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); gap: 10px; }
+.moon-site-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px 15px;
+  background: #11182a;
+  border: 1px solid var(--edge);
+  border-top: 2px solid var(--site-color);
+  border-radius: 11px;
+}
+.moon-card-heading { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+.moon-card-heading h3 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: .96rem; }
+.moon-card-heading p { color: var(--muted); margin: 3px 0 0; font-size: .8rem; font-variant-numeric: tabular-nums; }
+.moon-shell .moon-card-close { padding: 3px 8px; line-height: 1; font-size: 1.2rem; }
+.moon-shell .moon-primary-action { background: #dbe8ff; color: #101525; border-color: #dbe8ff; font-weight: 650; }
+.moon-shell .moon-primary-action:not(:disabled):hover { background: #fff; }
+@media (max-width: 600px) {
+  .moon-coordinate-search { flex-basis: 100%; }
+}
 .moon-stage-actions {
   right: 14px;
   bottom: 14px;
@@ -212,3 +251,18 @@
   pointer-events: none;
 }
 .moon-scale-line { height: 6px; border: 2px solid currentColor; border-top: 0; }
+
+.moon-mission-form { display: grid; gap: 10px; }
+.moon-mission-form label { margin: 0; }
+.moon-mission-form .moon-form-error { margin: 0; color: #ffb8ad; }
+.moon-settings, .moon-coordinate-entry { font-size: .85rem; color: var(--muted); }
+.moon-settings { margin: 12px 0; padding: 10px 0; border-block: 1px solid var(--edge); }
+.moon-settings summary, .moon-coordinate-entry summary { cursor: pointer; color: var(--ink); }
+.moon-settings label:first-of-type { margin-top: 12px; }
+.moon-settings label:last-child { margin-bottom: 0; }
+.moon-settings input[type="range"] { min-height: 22px; padding: 0; accent-color: var(--accent); }
+.moon-coordinate-entry { margin-top: 12px; }
+.moon-coordinate-entry form { width: min(100%, 330px); margin-top: 8px; }
+@media (max-width: 730px) {
+  .moon-mission-form, .moon-settings { grid-column: 1 / -1; }
+}

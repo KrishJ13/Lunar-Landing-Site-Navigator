@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import CompassStrip from '../components/CompassStrip.jsx'
 import { angleDiff, compassName, elevationStep, makeViewScale, wrap360 } from '../lib/view.js'
@@ -26,7 +26,7 @@ const clampPitch = (pitch, minPitch) => Math.max(minPitch, Math.min(MAX_PITCH, p
  * fraction of the Sun's disc it sees (shadowField.js), baked once per time step.
  */
 export default function FirstPersonTerrain({ terrain, bodies = null, lighting = { mode: 'fixed' }, field = null, shadowHeightM = 0.5, frameKey,
-  height = 440 }) {
+  height = 440, aimRef }) {
   const wrapRef = useRef(null)
   const skyRef = useRef(null)
   const skyRendererRef = useRef(null)
@@ -44,6 +44,11 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
   // The lower edge sits half a vertical field of view below the camera centre.
   const minPitch = MIN_VISIBLE_ELEVATION + fov * viewHeight / (2 * width)
   const viewPitch = clampPitch(pitch, minPitch)
+  const lookAt = useCallback((body) => {
+    setHeading(wrap360(body.azimuth_deg))
+    setPitch(clampPitch(body.elevation_deg, minPitch))
+  }, [minPitch])
+  useImperativeHandle(aimRef, () => lookAt, [lookAt])
   const drag = useRef(null)
   const rendererRef = useRef(null)
   const [error, setError] = useState(null)
@@ -68,7 +73,7 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
   }, [terrain])
 
   useEffect(() => {
-    const sky = createSkyRenderer(skyRef.current)
+    const sky = createSkyRenderer(skyRef.current, { surfaceExposure: true })
     skyRendererRef.current = sky
     return () => {
       sky?.dispose()
@@ -182,10 +187,7 @@ export default function FirstPersonTerrain({ terrain, bodies = null, lighting = 
           {minPitch > 0 ? 'Reset tilt' : 'Level view'}
         </button>
         {bodies && Object.entries(BODY_STYLE).map(([key, { label }]) => (
-          <button key={key} type="button" onClick={() => {
-            setHeading(wrap360(bodies[key].azimuth_deg))
-            setPitch(clampPitch(bodies[key].elevation_deg, minPitch))
-          }}>
+          <button key={key} type="button" onClick={() => lookAt(bodies[key])}>
             Look at {label}
           </button>
         ))}

@@ -2,12 +2,15 @@
 
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 from lunar.config import MOON_RADIUS_M as R
 from lunar.dem import DemProduct
-from lunar.geometry import enu_basis
+from lunar.geometry import destination, enu_basis, surface_vector
 from lunar.horizon_maps import build_horizon_maps, direct_horizon, map_surfaces
-from lunar.illumination import illumination_series, summarise, visible_fraction
+from lunar.illumination import (
+    AU_M, DARK, SOLAR_CONSTANT_W_M2, illumination_series, mission_solar_energy, mission_sunlight, summarise, visible_fraction,
+)
 
 
 def _maps(products, lat, lon, diameter, **kw):
@@ -51,6 +54,35 @@ def test_visible_fraction_of_the_disc_is_the_circular_segment():
         expected = 1 - (np.arccos(t) - t * np.sqrt(1 - t * t)) / np.pi
         got = visible_fraction(flat, 1.0, np.array([123.0]), np.array([e]), np.array([r]))[0]
         assert got == pytest.approx(expected, abs=0.003)
+
+
+def test_mission_sunlight_counts_elapsed_time_and_clips_at_the_exact_end():
+    inside = np.array([[True, True, True, False]])
+    # The third point darkens halfway through the first hour and stays dark through the short final interval.
+    lit = np.array([[[1, 0, 2 * DARK, 0]], [[1, 0, 0, 0]], [[1, 0, 0, 0]]], dtype=float)
+    daylight, longest = mission_sunlight(lit, inside, [0, 1, 1.25])
+    np.testing.assert_allclose(daylight[inside], [1.25, 0, 0.5])
+    np.testing.assert_allclose(longest[inside], [0, 1.25, 0.75])
+    assert np.isnan(daylight[~inside]).all() and np.isnan(longest[~inside]).all()
+
+
+def test_mission_energy_uses_slope_shadow_distance_and_elapsed_time():
+    x, y = np.meshgrid([-100, 0, 100], [-100, 0, 100])
+    lat, lon = destination(0, 0, np.degrees(np.arctan2(x, y)), np.hypot(x, y))
+    inside = np.zeros(x.shape, dtype=bool)
+    inside[1, 1] = True
+    # Ground rises eastwards at 45°, so the surface faces an observer looking down from the west.
+    hm = SimpleNamespace(point_lat=lat, point_lon=lon, ground_m=x, in_disc=inside, mast_height_m=2)
+    east, _, up = enu_basis(0, 0)
+    face = (up - east) / np.sqrt(2)
+    origin = surface_vector(0, 0, 2)
+    suns = np.array([origin - face * AU_M, origin + face * AU_M, origin + face * 2 * AU_M])
+    lit = np.broadcast_to(np.array([1, 0.5, 1])[:, None, None], (3, 3, 3))
+    result = mission_solar_energy(hm, suns, lit, [0, 1, 1.5])
+    # Start contributes nothing on the back face. Midpoint has half visibility, and final sample has one-quarter flux.
+    expected = SOLAR_CONSTANT_W_M2 * (0.5 * 0.75 + 0.25 * 0.25) / 1000
+    assert result[1, 1] == pytest.approx(expected, rel=1e-5)
+    assert np.isnan(result[~inside]).all()
 
 
 def test_illumination_series_on_the_bare_sphere(make_cylindrical):

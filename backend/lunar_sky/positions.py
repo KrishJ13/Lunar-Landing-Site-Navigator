@@ -122,10 +122,11 @@ ILLUMINATION_MAX_SAMPLES = 10000  # e.g. 3 months at 15 min
 ILLUMINATION_MAX_HOURS = 24 * 400  # about 13 lunar days
 
 
-def body_series(latitude_deg, longitude_deg_east, elevation_m, start_utc, hours, step_minutes):
+def body_series(latitude_deg, longitude_deg_east, elevation_m, start_utc, hours, step_minutes, *, include_end=False):
     """Apparent Sun and Earth for the observer at the site, every step from start_utc for `hours`
     (t_k = start + k step, k = 0..floor(hours*60/step)), evaluated as calculate_positions
     (spkcpo, LT+S, MOON_ME_DE440_ME421, refloc OBSERVER). Caller holds the SPICE lock.
+    Include the exact end as an extra sample when include_end is enabled.
     Returns (UTC timestamps, {"sun"|"earth": {"azimuth_deg", "elevation_deg", "distance_km",
     "angular_radius_deg"} arrays}, sun_m (T, 3) Moon-fixed Sun centres in metres, Sun radius m)."""
     start = _validate(latitude_deg, longitude_deg_east, elevation_m, start_utc)
@@ -144,9 +145,13 @@ def body_series(latitude_deg, longitude_deg_east, elevation_m, start_utc, hours,
     times, suns = [], []
     columns = {key: {"azimuth_deg": [], "elevation_deg": [], "distance_km": [], "angular_radius_deg": []}
                for key in _TARGETS}
+    offsets = [timedelta(minutes=step_minutes * k) for k in range(count)]
+    end = timedelta(hours=hours)
+    if include_end and offsets[-1] < end:
+        offsets.append(end)
     try:
-        for k in range(count):
-            dt = start + timedelta(minutes=step_minutes * k)
+        for offset in offsets:
+            dt = start + offset
             et = _et(dt)
             out = _evaluate(et, obspos, enu)
             for key, body in out.items():
